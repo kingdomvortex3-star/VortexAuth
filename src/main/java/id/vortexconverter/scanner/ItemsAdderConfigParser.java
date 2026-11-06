@@ -5,12 +5,15 @@ import org.bukkit.configuration.ConfigurationSection;
 import org.bukkit.configuration.file.YamlConfiguration;
 
 import java.io.File;
+import java.io.IOException;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Set;
+import java.util.HashSet;
 
 public final class ItemsAdderConfigParser {
 
@@ -113,6 +116,7 @@ public final class ItemsAdderConfigParser {
             return firstProperty(
                     "resource.model_path",
                     "resource.model",
+                    "resource.generate",
                     "model_path",
                     "model",
                     "geometry"
@@ -123,6 +127,7 @@ public final class ItemsAdderConfigParser {
             return firstProperty(
                     "resource.texture",
                     "resource.textures",
+                    "resource.material",
                     "textures",
                     "texture"
             );
@@ -148,6 +153,18 @@ public final class ItemsAdderConfigParser {
             try {
                 return Integer.parseInt(value.trim());
             } catch (NumberFormatException ignored) {
+                try {
+                    double number = Double.parseDouble(value.trim());
+
+                    if (number >= 0
+                            && number <= Integer.MAX_VALUE
+                            && number == Math.floor(number)) {
+                        return (int) number;
+                    }
+                } catch (NumberFormatException ignoredAgain) {
+                    return null;
+                }
+
                 return null;
             }
         }
@@ -198,13 +215,26 @@ public final class ItemsAdderConfigParser {
 
             return null;
         }
+
+        private void mergeProperties(Map<String, String> incoming) {
+            for (Map.Entry<String, String> entry : incoming.entrySet()) {
+                if (entry.getValue() == null || entry.getValue().isBlank()) {
+                    continue;
+                }
+
+                properties.putIfAbsent(entry.getKey(), entry.getValue());
+            }
+        }
     }
 
     public static final class ParseResult {
 
         private final List<AssetInfo> assets = new ArrayList<>();
         private final List<String> errors = new ArrayList<>();
+        private final Set<String> assetKeys = new HashSet<>();
+
         private int filesRead;
+        private int namespacesRead;
 
         public List<AssetInfo> getAssets() {
             return Collections.unmodifiableList(assets);
@@ -216,6 +246,10 @@ public final class ItemsAdderConfigParser {
 
         public int getFilesRead() {
             return filesRead;
+        }
+
+        public int getNamespacesRead() {
+            return namespacesRead;
         }
 
         public int getTotalAssets() {
@@ -263,6 +297,29 @@ public final class ItemsAdderConfigParser {
         public boolean hasErrors() {
             return !errors.isEmpty();
         }
+
+        private void addAsset(AssetInfo asset) {
+            String key = asset.getNamespace().toLowerCase(Locale.ROOT)
+                    + ":" + asset.getType().name()
+                    + ":" + asset.getId().toLowerCase(Locale.ROOT);
+
+            if (assetKeys.add(key)) {
+                assets.add(asset);
+                return;
+            }
+
+            for (AssetInfo existing : assets) {
+                String existingKey =
+                        existing.getNamespace().toLowerCase(Locale.ROOT)
+                                + ":" + existing.getType().name()
+                                + ":" + existing.getId().toLowerCase(Locale.ROOT);
+
+                if (existingKey.equals(key)) {
+                    existing.mergeProperties(asset.getProperties());
+                    return;
+                }
+            }
+        }
     }
 
     public ParseResult parse(File contentsFolder) {
@@ -277,7 +334,7 @@ public final class ItemsAdderConfigParser {
             return result;
         }
 
-        File[] namespaces = contentsFolder.listFiles(File::isDirectory);
+        File[] namespaces = listDirectories(contentsFolder, result);
 
         if (namespaces == null) {
             result.errors.add(
@@ -287,14 +344,14 @@ public final class ItemsAdderConfigParser {
         }
 
         for (File namespaceFolder : namespaces) {
-            File configFolder = new File(namespaceFolder, "configs");
-
-            if (!configFolder.isDirectory()) {
+            if (!namespaceFolder.isDirectory()) {
                 continue;
             }
 
-            scanConfigDirectory(
-                    configFolder,
+            result.namespacesRead++;
+
+            scanNamespaceRecursively(
+                    namespaceFolder,
                     namespaceFolder.getName(),
                     result
             );
@@ -303,7 +360,7 @@ public final class ItemsAdderConfigParser {
         return result;
     }
 
-    private void scanConfigDirectory(
+    private void scanNamespaceRecursively(
             File folder,
             String namespace,
             ParseResult result
@@ -317,9 +374,19 @@ public final class ItemsAdderConfigParser {
             return;
         }
 
+        java.util.Arrays.sort(
+                files,
+                (first, second) ->
+                        first.getName().compareToIgnoreCase(second.getName())
+        );
+
         for (File file : files) {
             if (file.isDirectory()) {
-                scanConfigDirectory(file, namespace, result);
+                scanNamespaceRecursively(
+                        file,
+                        namespace,
+                        result
+                );
                 continue;
             }
 
@@ -345,50 +412,12 @@ public final class ItemsAdderConfigParser {
             yaml.load(file);
             result.filesRead++;
 
-            ConfigurationSection root = yaml;
-
-            for (String key : root.getKeys(false)) {
-                ConfigurationSection section =
-                        root.getConfigurationSection(key);
-
-                if (section == null) {
-                    continue;
-                }
-
-                AssetType type = identifyType(key);
-
-                if (type == AssetType.OTHER) {
-                    continue;
-                }
-
-                for (String id : section.getKeys(false)) {
-                    ConfigurationSection assetSection =
-                            section.getConfigurationSection(id);
-
-                    if (assetSection == null) {
-                        continue;
-                    }
-
-                    Map<String, String> properties =
-                            new LinkedHashMap<>();
-
-                    collectProperties(
-                            assetSection,
-                            "",
-                            properties
-                    );
-
-                    result.assets.add(
-                            new AssetInfo(
-                                    namespace,
-                                    id,
-                                    type,
-                                    file.getPath(),
-                                    properties
-                            )
-                    );
-                }
-            }
+            scanConfigurationSection(
+                    yaml,
+                    namespace,
+                    file,
+                    result
+            );
 
         } catch (Exception exception) {
             result.errors.add(
@@ -397,15 +426,93 @@ public final class ItemsAdderConfigParser {
         }
     }
 
+    private void scanConfigurationSection(
+            ConfigurationSection section,
+            String namespace,
+            File sourceFile,
+            ParseResult result
+    ) {
+        for (String key : section.getKeys(false)) {
+            Object value = section.get(key);
+
+            if (!(value instanceof ConfigurationSection child)) {
+                continue;
+            }
+
+            AssetType type = identifyType(key);
+
+            if (type != AssetType.OTHER) {
+                parseAssetCategory(
+                        child,
+                        namespace,
+                        type,
+                        sourceFile,
+                        result
+                );
+            } else {
+                scanConfigurationSection(
+                        child,
+                        namespace,
+                        sourceFile,
+                        result
+                );
+            }
+        }
+    }
+
+    private void parseAssetCategory(
+            ConfigurationSection category,
+            String namespace,
+            AssetType type,
+            File sourceFile,
+            ParseResult result
+    ) {
+        for (String id : category.getKeys(false)) {
+            Object value = category.get(id);
+
+            if (!(value instanceof ConfigurationSection assetSection)) {
+                continue;
+            }
+
+            Map<String, String> properties = new LinkedHashMap<>();
+
+            collectProperties(
+                    assetSection,
+                    "",
+                    properties
+            );
+
+            result.addAsset(
+                    new AssetInfo(
+                            namespace,
+                            id,
+                            type,
+                            sourceFile.getPath(),
+                            properties
+                    )
+            );
+        }
+    }
+
     private AssetType identifyType(String key) {
-        return switch (key.toLowerCase(Locale.ROOT)) {
-            case "items", "custom_items" -> AssetType.ITEM;
+        String normalized = key
+                .toLowerCase(Locale.ROOT)
+                .replace("_", "")
+                .replace("-", "")
+                .replace(" ", "");
 
-            case "blocks", "custom_blocks" -> AssetType.BLOCK;
+        return switch (normalized) {
+            case "items", "customitems", "item" ->
+                    AssetType.ITEM;
 
-            case "furniture" -> AssetType.FURNITURE;
+            case "blocks", "customblocks", "block" ->
+                    AssetType.BLOCK;
 
-            case "entities", "custom_entities" -> AssetType.ENTITY;
+            case "furniture", "customfurniture" ->
+                    AssetType.FURNITURE;
+
+            case "entities", "customentities", "entity" ->
+                    AssetType.ENTITY;
 
             default -> AssetType.OTHER;
         };
@@ -423,57 +530,93 @@ public final class ItemsAdderConfigParser {
                     ? key
                     : prefix + "." + key;
 
-            if (value instanceof ConfigurationSection child) {
-                collectProperties(child, path, properties);
-                continue;
-            }
-
-            if (value == null) {
-                continue;
-            }
-
-            if (value instanceof List<?> list) {
-                List<String> values = new ArrayList<>();
-
-                for (Object element : list) {
-                    if (element == null) {
-                        continue;
-                    }
-
-                    if (element instanceof Map<?, ?> map) {
-                        values.add(map.toString());
-                    } else {
-                        values.add(String.valueOf(element));
-                    }
-                }
-
-                properties.put(
-                        path,
-                        String.join(", ", values)
-                );
-
-            } else if (value instanceof Map<?, ?> map) {
-                for (Map.Entry<?, ?> entry : map.entrySet()) {
-                    if (entry.getKey() == null
-                            || entry.getValue() == null) {
-                        continue;
-                    }
-
-                    String nestedPath = path + "."
-                            + entry.getKey();
-
-                    properties.put(
-                            nestedPath,
-                            String.valueOf(entry.getValue())
-                    );
-                }
-
-            } else {
-                properties.put(
-                        path,
-                        String.valueOf(value)
-                );
-            }
+            collectValue(path, value, properties);
         }
+    }
+
+    private void collectValue(
+            String path,
+            Object value,
+            Map<String, String> properties
+    ) {
+        if (value == null) {
+            return;
+        }
+
+        if (value instanceof ConfigurationSection section) {
+            for (String key : section.getKeys(false)) {
+                collectValue(
+                        path + "." + key,
+                        section.get(key),
+                        properties
+                );
+            }
+            return;
+        }
+
+        if (value instanceof Map<?, ?> map) {
+            for (Map.Entry<?, ?> entry : map.entrySet()) {
+                if (entry.getKey() == null) {
+                    continue;
+                }
+
+                collectValue(
+                        path + "." + entry.getKey(),
+                        entry.getValue(),
+                        properties
+                );
+            }
+            return;
+        }
+
+        if (value instanceof List<?> list) {
+            List<String> simpleValues = new ArrayList<>();
+
+            for (int index = 0; index < list.size(); index++) {
+                Object element = list.get(index);
+
+                if (element instanceof Map<?, ?>
+                        || element instanceof ConfigurationSection
+                        || element instanceof List<?>) {
+                    collectValue(
+                            path + "." + index,
+                            element,
+                            properties
+                    );
+                } else if (element != null) {
+                    simpleValues.add(String.valueOf(element));
+                }
+            }
+
+            if (!simpleValues.isEmpty()) {
+                properties.put(
+                        path,
+                        String.join(", ", simpleValues)
+                );
+            }
+
+            return;
+        }
+
+        properties.put(path, String.valueOf(value));
+    }
+
+    private File[] listDirectories(
+            File folder,
+            ParseResult result
+    ) {
+        File[] directories = folder.listFiles(File::isDirectory);
+
+        if (directories == null) {
+            return null;
+        }
+
+        java.util.Arrays.sort(
+                directories,
+                (first, second) ->
+                        first.getName().compareToIgnoreCase(second.getName())
+        );
+
+        return directories;
     }
 }
