@@ -21,11 +21,11 @@ public final class BlockbenchModelReader {
 
     public record Cube(
             String uuid,
+            String name,
             Vector3 from,
             Vector3 to,
             Vector3 origin,
-            Vector3 rotation,
-            String name
+            Vector3 rotation
     ) {}
 
     public record Bone(
@@ -38,11 +38,7 @@ public final class BlockbenchModelReader {
             List<Bone> children
     ) {}
 
-    public record DataPoint(
-            Vector3 position,
-            Vector3 rotation,
-            Vector3 scale
-    ) {}
+    public record DataPoint(Vector3 value) {}
 
     public record Keyframe(
             double time,
@@ -68,7 +64,6 @@ public final class BlockbenchModelReader {
     ) {}
 
     private final Map<String, Cube> cubeIndex = new LinkedHashMap<>();
-    private final Map<String, JsonObject> boneIndex = new LinkedHashMap<>();
 
     public BlockbenchModel read(File file) throws IOException {
         if (file == null || !file.isFile()) {
@@ -80,41 +75,40 @@ public final class BlockbenchModelReader {
                     .getAsJsonObject();
 
             cubeIndex.clear();
-            boneIndex.clear();
-
-            String name = string(root, "name", "unnamed");
 
             JsonObject resolution = object(root, "resolution");
 
-            int textureWidth = integer(resolution, "width", 16);
-            int textureHeight = integer(resolution, "height", 16);
-
             indexCubes(root);
-            indexBones(root);
 
-            List<Bone> bones = readBones(root);
+            List<Bone> bones = new ArrayList<>();
+
+            for (JsonElement element : array(root, "outliner")) {
+                Bone bone = readBone(element, null);
+                if (bone != null) {
+                    bones.add(bone);
+                }
+            }
+
             List<Animation> animations = readAnimations(root);
 
             return new BlockbenchModel(
-                    name,
-                    textureWidth,
-                    textureHeight,
+                    string(root, "name", "unnamed"),
+                    integer(resolution, "width", 16),
+                    integer(resolution, "height", 16),
                     Collections.unmodifiableList(bones),
                     Collections.unmodifiableList(animations)
             );
 
         } catch (RuntimeException exception) {
             throw new IOException(
-                    "Failed to read BBModel: " + exception.getMessage(),
+                    "Invalid BBModel: " + exception.getMessage(),
                     exception
             );
         }
     }
 
     private void indexCubes(JsonObject root) {
-        JsonArray elements = array(root, "elements");
-
-        for (JsonElement element : elements) {
+        for (JsonElement element : array(root, "elements")) {
             JsonObject object = element.getAsJsonObject();
 
             String uuid = string(object, "uuid", "");
@@ -123,60 +117,15 @@ public final class BlockbenchModelReader {
                 continue;
             }
 
-            Vector3 from = vector(object, "from");
-            Vector3 to = vector(object, "to");
-            Vector3 origin = vector(object, "origin");
-            Vector3 rotation = vector(object, "rotation");
-
             cubeIndex.put(uuid, new Cube(
                     uuid,
-                    from,
-                    to,
-                    origin,
-                    rotation,
-                    string(object, "name", uuid)
+                    string(object, "name", uuid),
+                    vector(object, "from"),
+                    vector(object, "to"),
+                    vector(object, "origin"),
+                    vector(object, "rotation")
             ));
         }
-    }
-
-    private void indexBones(JsonObject root) {
-        JsonArray outliner = array(root, "outliner");
-
-        for (JsonElement element : outliner) {
-            indexBoneTree(element);
-        }
-    }
-
-    private void indexBoneTree(JsonElement element) {
-        if (!element.isJsonObject()) {
-            return;
-        }
-
-        JsonObject object = element.getAsJsonObject();
-
-        String uuid = string(object, "uuid", "");
-
-        if (!uuid.isBlank() && object.has("children")) {
-            boneIndex.put(uuid, object);
-        }
-
-        for (JsonElement child : array(object, "children")) {
-            indexBoneTree(child);
-        }
-    }
-
-    private List<Bone> readBones(JsonObject root) {
-        List<Bone> bones = new ArrayList<>();
-
-        for (JsonElement element : array(root, "outliner")) {
-            Bone bone = readBone(element, null);
-
-            if (bone != null) {
-                bones.add(bone);
-            }
-        }
-
-        return bones;
     }
 
     private Bone readBone(JsonElement element, String parent) {
@@ -187,18 +136,14 @@ public final class BlockbenchModelReader {
         JsonObject object = element.getAsJsonObject();
 
         String uuid = string(object, "uuid", "");
-
-        if (!object.has("children")) {
-            return null;
-        }
+        String name = string(object, "name", "bone");
 
         List<Cube> cubes = new ArrayList<>();
         List<Bone> children = new ArrayList<>();
 
         for (JsonElement child : array(object, "children")) {
             if (child.isJsonPrimitive()) {
-                String cubeUuid = child.getAsString();
-                Cube cube = cubeIndex.get(cubeUuid);
+                Cube cube = cubeIndex.get(child.getAsString());
 
                 if (cube != null) {
                     cubes.add(cube);
@@ -214,7 +159,7 @@ public final class BlockbenchModelReader {
 
         return new Bone(
                 uuid,
-                string(object, "name", uuid),
+                name,
                 parent,
                 vector(object, "origin"),
                 vector(object, "rotation"),
@@ -269,6 +214,12 @@ public final class BlockbenchModelReader {
         for (JsonElement element : array(animator, "keyframes")) {
             JsonObject object = element.getAsJsonObject();
 
+            String channel = string(
+                    object,
+                    "channel",
+                    "rotation"
+            );
+
             List<DataPoint> points = new ArrayList<>();
 
             for (JsonElement point : array(object, "data_points")) {
@@ -279,15 +230,17 @@ public final class BlockbenchModelReader {
                 JsonObject data = point.getAsJsonObject();
 
                 points.add(new DataPoint(
-                        stringVector(data, "x", "y", "z", "0"),
-                        stringVector(data, "x", "y", "z", "0"),
-                        scaleVector(data)
+                        new Vector3(
+                                decimalString(data, "x", 0),
+                                decimalString(data, "y", 0),
+                                decimalString(data, "z", 0)
+                        )
                 ));
             }
 
             keyframes.add(new Keyframe(
                     decimal(object, "time", 0),
-                    string(object, "channel", "rotation"),
+                    channel,
                     string(object, "interpolation", "linear"),
                     Collections.unmodifiableList(points)
             ));
@@ -296,47 +249,17 @@ public final class BlockbenchModelReader {
         return keyframes;
     }
 
-    private Vector3 stringVector(
-            JsonObject object,
-            String x,
-            String y,
-            String z,
-            String fallback
-    ) {
-        return new Vector3(
-                decimalString(object, x, fallback),
-                decimalString(object, y, fallback),
-                decimalString(object, z, fallback)
-        );
-    }
-
-    private Vector3 scaleVector(JsonObject object) {
-        return stringVector(object, "x", "y", "z", "1");
-    }
-
-    private double decimalString(
-            JsonObject object,
-            String key,
-            String fallback
-    ) {
-        try {
-            return Double.parseDouble(string(object, key, fallback));
-        } catch (NumberFormatException exception) {
-            return Double.parseDouble(fallback);
-        }
-    }
-
     private Vector3 vector(JsonObject object, String key) {
-        JsonArray array = array(object, key);
+        JsonArray values = array(object, key);
 
-        if (array.size() != 3) {
+        if (values.size() != 3) {
             return new Vector3(0, 0, 0);
         }
 
         return new Vector3(
-                array.get(0).getAsDouble(),
-                array.get(1).getAsDouble(),
-                array.get(2).getAsDouble()
+                values.get(0).getAsDouble(),
+                values.get(1).getAsDouble(),
+                values.get(2).getAsDouble()
         );
     }
 
@@ -391,6 +314,20 @@ public final class BlockbenchModelReader {
         try {
             return object.get(key).getAsDouble();
         } catch (Exception exception) {
+            return fallback;
+        }
+    }
+
+    private double decimalString(
+            JsonObject object,
+            String key,
+            double fallback
+    ) {
+        try {
+            return Double.parseDouble(
+                    string(object, key, String.valueOf(fallback))
+            );
+        } catch (NumberFormatException exception) {
             return fallback;
         }
     }
