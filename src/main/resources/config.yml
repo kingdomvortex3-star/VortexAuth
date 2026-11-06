@@ -1,4 +1,3 @@
-
 # ==========================================
 #              VORTEX AUTH
 #           Main Configuration
@@ -8,7 +7,6 @@ settings:
   language: id
   debug: false
   prefix: "&8[&bVortexAuth&8]"
-
   update-checker: true
 
 # ==========================================
@@ -28,6 +26,7 @@ authentication:
     enabled: true
     max-attempts: 5
     timeout-seconds: 60
+    lock-duration-seconds: 300
 
   password:
     hashing: bcrypt
