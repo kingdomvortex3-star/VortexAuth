@@ -2,6 +2,7 @@
 package id.vortexconverter.commands;
 
 import id.vortexconverter.VortexConverter;
+import id.vortexconverter.scanner.ItemsAdderScanner;
 import org.bukkit.Bukkit;
 import org.bukkit.command.Command;
 import org.bukkit.command.CommandExecutor;
@@ -17,9 +18,11 @@ import java.util.List;
 public final class CommandManager implements CommandExecutor, TabCompleter {
 
     private final VortexConverter plugin;
+    private final ItemsAdderScanner itemsAdderScanner;
 
     public CommandManager(VortexConverter plugin) {
         this.plugin = plugin;
+        this.itemsAdderScanner = new ItemsAdderScanner(plugin);
     }
 
     @Override
@@ -30,7 +33,7 @@ public final class CommandManager implements CommandExecutor, TabCompleter {
             @NotNull String[] args
     ) {
         if (!sender.hasPermission("vortexconverter.admin")) {
-            sender.sendMessage("§cYou don't have permission to use this command.");
+            sender.sendMessage("§cYou don't have permission.");
             return true;
         }
 
@@ -41,42 +44,41 @@ public final class CommandManager implements CommandExecutor, TabCompleter {
 
         switch (args[0].toLowerCase()) {
             case "help" -> sendHelp(sender);
-
             case "scan" -> scanPlugins(sender);
-
+            case "itemsadder" -> scanItemsAdder(sender);
             case "report" -> sendReport(sender);
 
             case "reload" -> {
                 plugin.reloadConfig();
-                sender.sendMessage("§aVortexConverter configuration reloaded.");
+                sender.sendMessage("§aConfiguration reloaded.");
             }
 
             case "convert" -> sender.sendMessage(
                     "§eConversion engine is not implemented yet."
             );
 
-            default -> {
-                sender.sendMessage("§cUnknown command. Use /vortexconvert help.");
-            }
+            default -> sender.sendMessage(
+                    "§cUnknown command. Use /vortexconvert help."
+            );
         }
 
         return true;
     }
 
     private void sendHelp(CommandSender sender) {
-        sender.sendMessage("§b§lVortexConverter §7- §fJava to Bedrock");
-        sender.sendMessage("§8--------------------------------");
-        sender.sendMessage("§b/vortexconvert help §7- Show commands");
-        sender.sendMessage("§b/vortexconvert scan §7- Scan installed plugins");
-        sender.sendMessage("§b/vortexconvert report §7- Server environment report");
-        sender.sendMessage("§b/vortexconvert reload §7- Reload configuration");
-        sender.sendMessage("§b/vortexconvert convert §7- Start conversion");
-        sender.sendMessage("§8--------------------------------");
+        sender.sendMessage("§b§lVortexConverter");
+        sender.sendMessage("§8----------------------------");
+        sender.sendMessage("§b/vortexconvert help §7- Help");
+        sender.sendMessage("§b/vortexconvert scan §7- Scan integrations");
+        sender.sendMessage("§b/vortexconvert itemsadder §7- Scan ItemsAdder");
+        sender.sendMessage("§b/vortexconvert report §7- Server report");
+        sender.sendMessage("§b/vortexconvert reload §7- Reload config");
+        sender.sendMessage("§b/vortexconvert convert §7- Convert assets");
+        sender.sendMessage("§8----------------------------");
     }
 
     private void scanPlugins(CommandSender sender) {
-        sender.sendMessage("§b§lVortexConverter Plugin Scanner");
-        sender.sendMessage("§7Checking installed integrations...");
+        sender.sendMessage("§b§lIntegration Scanner");
 
         checkPlugin(sender, "ItemsAdder");
         checkPlugin(sender, "Oraxen");
@@ -85,7 +87,7 @@ public final class CommandManager implements CommandExecutor, TabCompleter {
         checkPlugin(sender, "Geyser-Spigot");
         checkPlugin(sender, "Geyser");
 
-        sender.sendMessage("§aPlugin scan completed.");
+        sender.sendMessage("§aIntegration scan completed.");
     }
 
     private void checkPlugin(CommandSender sender, String name) {
@@ -93,32 +95,65 @@ public final class CommandManager implements CommandExecutor, TabCompleter {
 
         if (detected != null && detected.isEnabled()) {
             sender.sendMessage(
-                    "§a[FOUND] §f" + name +
-                    " §7(v" + detected.getPluginMeta().getVersion() + ")"
+                    "§a[FOUND] §f" + name + " §7v"
+                            + detected.getPluginMeta().getVersion()
             );
         } else {
             sender.sendMessage("§c[NOT FOUND] §f" + name);
         }
     }
 
+    private void scanItemsAdder(CommandSender sender) {
+        sender.sendMessage("§b§lVortexConverter - ItemsAdder Scanner");
+        sender.sendMessage("§7Scanning ItemsAdder assets...");
+
+        ItemsAdderScanner.ScanResult result = itemsAdderScanner.scan();
+
+        if (!result.isPluginInstalled()) {
+            sender.sendMessage("§cItemsAdder folder not found.");
+            return;
+        }
+
+        if (!result.isContentsFound()) {
+            sender.sendMessage("§cItemsAdder contents folder not found.");
+            return;
+        }
+
+        if (!result.isScanSuccessful()) {
+            sender.sendMessage("§cScan failed: " + result.getError());
+            return;
+        }
+
+        sender.sendMessage("§8----------------------------");
+        sender.sendMessage("§aScan completed successfully!");
+        sender.sendMessage("§7Namespaces: §f" + result.getNamespaceCount());
+        sender.sendMessage("§7Total files: §f" + result.getTotalFiles());
+        sender.sendMessage("§7Configurations: §f" + result.getConfigurations());
+        sender.sendMessage("§7Textures: §f" + result.getTextures());
+        sender.sendMessage("§7JSON models: §f" + result.getModels());
+        sender.sendMessage("§7BBModels: §f" + result.getBbmodels());
+        sender.sendMessage("§7Other files: §f" + result.getOtherFiles());
+        sender.sendMessage("§7Total size: §f" + result.getFormattedSize());
+
+        sender.sendMessage("§8----------------------------");
+        sender.sendMessage("§bDetected namespaces:");
+
+        for (String namespace : result.getNamespaces()) {
+            sender.sendMessage("§7- §f" + namespace);
+        }
+    }
+
     private void sendReport(CommandSender sender) {
         sender.sendMessage("§b§lVortexConverter Server Report");
-        sender.sendMessage("§8--------------------------------");
+        sender.sendMessage("§8----------------------------");
         sender.sendMessage("§7Server: §f" + Bukkit.getName());
         sender.sendMessage("§7Minecraft: §f" + Bukkit.getMinecraftVersion());
         sender.sendMessage("§7Bukkit API: §f" + Bukkit.getBukkitVersion());
         sender.sendMessage("§7Java: §f" + System.getProperty("java.version"));
-        sender.sendMessage("§7Online players: §f" +
-                Bukkit.getOnlinePlayers().size());
-
-        sender.sendMessage("§8--------------------------------");
-        sender.sendMessage("§7Workspace: §f" +
-                plugin.getWorkspaceFolder().getPath());
-
-        sender.sendMessage("§7Output: §f" +
-                plugin.getOutputFolder().getPath());
-
-        sender.sendMessage("§8--------------------------------");
+        sender.sendMessage("§7Online players: §f" + Bukkit.getOnlinePlayers().size());
+        sender.sendMessage("§7Workspace: §f" + plugin.getWorkspaceFolder().getPath());
+        sender.sendMessage("§7Output: §f" + plugin.getOutputFolder().getPath());
+        sender.sendMessage("§8----------------------------");
     }
 
     @Override
@@ -134,15 +169,11 @@ public final class CommandManager implements CommandExecutor, TabCompleter {
 
         if (args.length == 1) {
             String input = args[0].toLowerCase();
-
             List<String> suggestions = new ArrayList<>();
 
             for (String option : List.of(
-                    "help",
-                    "scan",
-                    "report",
-                    "reload",
-                    "convert"
+                    "help", "scan", "itemsadder",
+                    "report", "reload", "convert"
             )) {
                 if (option.startsWith(input)) {
                     suggestions.add(option);
