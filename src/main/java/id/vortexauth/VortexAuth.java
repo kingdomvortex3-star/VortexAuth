@@ -6,26 +6,33 @@ import id.vortexauth.auth.AuthenticationManager;
 import id.vortexauth.auth.LoginAttemptManager;
 import id.vortexauth.auth.PasswordManager;
 import id.vortexauth.auth.RegistrationManager;
-import id.vortexauth.auth.SessionManager;
+import id.vortexauth.session.SessionManager;
+
 import id.vortexauth.commands.AuthAdminCommand;
 import id.vortexauth.commands.AuthCommand;
 import id.vortexauth.commands.ChangePasswordCommand;
 import id.vortexauth.commands.LoginCommand;
 import id.vortexauth.commands.LogoutCommand;
 import id.vortexauth.commands.RegisterCommand;
+
 import id.vortexauth.database.DatabaseManager;
+
 import id.vortexauth.listeners.AntiBotListener;
 import id.vortexauth.listeners.AntiVpnListener;
 import id.vortexauth.listeners.PlayerChatListener;
 import id.vortexauth.listeners.PlayerConnectionListener;
 import id.vortexauth.listeners.PlayerProtectionListener;
+
 import id.vortexauth.security.AntiBotManager;
 import id.vortexauth.security.AntiVpnManager;
 import id.vortexauth.security.DiscordWebhookManager;
 import id.vortexauth.security.IpAddressManager;
+
+import org.bukkit.command.CommandExecutor;
 import org.bukkit.command.PluginCommand;
 import org.bukkit.plugin.java.JavaPlugin;
 
+import java.io.IOException;
 import java.sql.SQLException;
 
 public final class VortexAuth extends JavaPlugin {
@@ -70,6 +77,7 @@ public final class VortexAuth extends JavaPlugin {
             exception.printStackTrace();
 
             shutdownManagers();
+
             getServer().getPluginManager().disablePlugin(this);
         }
     }
@@ -110,7 +118,7 @@ public final class VortexAuth extends JavaPlugin {
         );
     }
 
-    private void initializeSecurity() {
+    private void initializeSecurity() throws IOException {
         getLogger().info("Initializing security systems...");
 
         ipAddressManager = new IpAddressManager(this);
@@ -167,13 +175,14 @@ public final class VortexAuth extends JavaPlugin {
 
     private void registerCommand(
             String name,
-            org.bukkit.command.CommandExecutor executor
+            CommandExecutor executor
     ) {
         PluginCommand command = getCommand(name);
 
         if (command == null) {
             throw new IllegalStateException(
-                    "Command '" + name + "' is missing from plugin.yml!"
+                    "Command '" + name
+                            + "' is missing from plugin.yml!"
             );
         }
 
@@ -184,27 +193,42 @@ public final class VortexAuth extends JavaPlugin {
         getLogger().info("Registering listeners...");
 
         getServer().getPluginManager().registerEvents(
-                new PlayerConnectionListener(this, authenticationManager),
+                new PlayerConnectionListener(
+                        this,
+                        authenticationManager
+                ),
                 this
         );
 
         getServer().getPluginManager().registerEvents(
-                new PlayerProtectionListener(this, authenticationManager),
+                new PlayerProtectionListener(
+                        this,
+                        authenticationManager
+                ),
                 this
         );
 
         getServer().getPluginManager().registerEvents(
-                new PlayerChatListener(this, authenticationManager),
+                new PlayerChatListener(
+                        this,
+                        authenticationManager
+                ),
                 this
         );
 
         getServer().getPluginManager().registerEvents(
-                new AntiBotListener(this, antiBotManager),
+                new AntiBotListener(
+                        this,
+                        antiBotManager
+                ),
                 this
         );
 
         getServer().getPluginManager().registerEvents(
-                new AntiVpnListener(this, antiVpnManager),
+                new AntiVpnListener(
+                        this,
+                        antiVpnManager
+                ),
                 this
         );
     }
