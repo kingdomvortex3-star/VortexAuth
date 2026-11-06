@@ -1,0 +1,55 @@
+
+settings:
+  debug: false
+  language: en_US
+
+workspace:
+  directory: workspace
+  output-directory: output
+  temporary-directory: temp
+
+integrations:
+  geyser:
+    enabled: true
+    auto-detect: true
+    custom-mappings: true
+    resource-pack: true
+    auto-install: false
+
+  itemsadder:
+    enabled: true
+    auto-detect: true
+
+  oraxen:
+    enabled: true
+    auto-detect: true
+
+  nexo:
+    enabled: true
+    auto-detect: true
+
+  modelengine:
+    enabled: true
+    auto-detect: true
+    convert-geometry: true
+    convert-animations: true
+    convert-bones: true
+
+conversion:
+  textures: true
+  models: true
+  animations: true
+  geometry: true
+  mappings: true
+
+  skip-unsupported: false
+  create-report: true
+
+resource-pack:
+  format: mcpack
+  compression: true
+  include-manifest: true
+
+backup:
+  enabled: true
+  before-install: true
