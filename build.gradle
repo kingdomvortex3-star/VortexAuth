@@ -23,21 +23,22 @@ repositories {
         name = 'GeyserMC'
         url = 'https://repo.opencollab.dev/main/'
     }
+
+    maven {
+        name = 'PlaceholderAPI'
+        url = 'https://repo.extendedclip.com/content/repositories/placeholderapi/'
+    }
 }
 
 dependencies {
     compileOnly 'io.papermc.paper:paper-api:26.3.build.+'
-
     compileOnly 'org.geysermc.floodgate:api:2.2.4-SNAPSHOT'
+    compileOnly 'me.clip:placeholderapi:2.11.6'
 
     implementation 'org.xerial:sqlite-jdbc:3.50.3.0'
-
     implementation 'com.zaxxer:HikariCP:6.3.0'
-
     implementation 'com.google.code.gson:gson:2.13.1'
-
     implementation 'org.mindrot:jbcrypt:0.4'
-
     implementation 'com.mysql:mysql-connector-j:9.4.0'
 }
 
@@ -56,9 +57,7 @@ processResources {
     filteringCharset = 'UTF-8'
 
     filesMatching('plugin.yml') {
-        expand(
-            version: project.version
-        )
+        expand(version: project.version)
     }
 }
 
