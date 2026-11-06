@@ -20,6 +20,7 @@ public final class BlockbenchConversionService {
     private final BlockbenchTextureMapper textureMapper;
     private final BlockbenchGeometryGenerator geometryGenerator;
     private final BedrockAnimationGenerator animationGenerator;
+    private final BlockbenchTextureCopyService textureCopyService;
 
     private final Gson gson = new GsonBuilder()
             .setPrettyPrinting()
@@ -30,6 +31,7 @@ public final class BlockbenchConversionService {
         this.textureMapper = new BlockbenchTextureMapper();
         this.geometryGenerator = new BlockbenchGeometryGenerator();
         this.animationGenerator = new BedrockAnimationGenerator();
+        this.textureCopyService = new BlockbenchTextureCopyService();
     }
 
     public ConversionResult convert(
@@ -39,16 +41,22 @@ public final class BlockbenchConversionService {
     ) throws IOException {
 
         if (inputFile == null || !inputFile.isFile()) {
-            throw new IOException("Input BBModel file does not exist.");
+            throw new IOException(
+                    "Input BBModel file does not exist."
+            );
         }
 
         if (!inputFile.getName().toLowerCase(Locale.ROOT)
                 .endsWith(".bbmodel")) {
-            throw new IOException("Input file must be a .bbmodel file.");
+            throw new IOException(
+                    "Input file must be a .bbmodel file."
+            );
         }
 
         if (outputDirectory == null) {
-            throw new IOException("Output directory cannot be null.");
+            throw new IOException(
+                    "Output directory cannot be null."
+            );
         }
 
         Path outputPath = outputDirectory.toPath();
@@ -119,6 +127,28 @@ public final class BlockbenchConversionService {
             }
         }
 
+        File sourceDirectory = inputFile.getAbsoluteFile()
+                .getParentFile();
+
+        BlockbenchTextureCopyService.CopyResult textureResult =
+                textureCopyService.copyTextures(
+                        inputFile,
+                        sourceDirectory,
+                        outputDirectory
+                );
+
+        List<File> copiedTextureFiles = new ArrayList<>();
+
+        Path textureDirectory = outputPath
+                .resolve("textures")
+                .resolve("entity");
+
+        for (String fileName : textureResult.copiedFiles()) {
+            copiedTextureFiles.add(
+                    textureDirectory.resolve(fileName).toFile()
+            );
+        }
+
         return new ConversionResult(
                 inputFile,
                 geometryFile.toFile(),
@@ -127,7 +157,10 @@ public final class BlockbenchConversionService {
                         .toList(),
                 model.bones().size(),
                 uvMappings.size(),
-                animationFiles.size()
+                animationFiles.size(),
+                copiedTextureFiles,
+                textureResult.copiedCount(),
+                textureResult.missingCount()
         );
     }
 
@@ -163,11 +196,7 @@ public final class BlockbenchConversionService {
                 .toLowerCase(Locale.ROOT)
                 .replaceAll("[^a-z0-9_.-]", "_");
 
-        if (sanitized.isBlank()) {
-            return "unnamed";
-        }
-
-        return sanitized;
+        return sanitized.isBlank() ? "unnamed" : sanitized;
     }
 
     public record ConversionResult(
@@ -176,6 +205,9 @@ public final class BlockbenchConversionService {
             List<File> animationFiles,
             int boneCount,
             int uvCubeCount,
-            int animationCount
+            int animationCount,
+            List<File> textureFiles,
+            int copiedTextureCount,
+            int missingTextureCount
     ) {}
 }
