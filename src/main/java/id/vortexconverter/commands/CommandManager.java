@@ -58,11 +58,8 @@ public final class CommandManager implements CommandExecutor, TabCompleter {
 
         switch (args[0].toLowerCase(Locale.ROOT)) {
             case "help" -> sendHelp(sender);
-
             case "scan" -> scanPlugins(sender);
-
             case "itemsadder" -> scanItemsAdder(sender);
-
             case "report" -> sendReport(sender);
 
             case "reload" -> {
@@ -88,7 +85,9 @@ public final class CommandManager implements CommandExecutor, TabCompleter {
         sender.sendMessage("§b/vortexconvert itemsadder §7- Scan ItemsAdder");
         sender.sendMessage("§b/vortexconvert report §7- Server report");
         sender.sendMessage("§b/vortexconvert reload §7- Reload config");
-        sender.sendMessage("§b/vortexconvert convert <file> [name] [geometry]");
+        sender.sendMessage(
+                "§b/vortexconvert convert <file> [name] [geometry]"
+        );
         sender.sendMessage("§7Convert a Blockbench .bbmodel file");
         sender.sendMessage("§8--------------------------------");
     }
@@ -259,7 +258,8 @@ public final class CommandManager implements CommandExecutor, TabCompleter {
             return;
         }
 
-        if (!inputFile.getName().toLowerCase(Locale.ROOT).endsWith(".bbmodel")) {
+        if (!inputFile.getName().toLowerCase(Locale.ROOT)
+                .endsWith(".bbmodel")) {
             sender.sendMessage("§cOnly .bbmodel files are supported.");
             return;
         }
@@ -297,6 +297,7 @@ public final class CommandManager implements CommandExecutor, TabCompleter {
 
             sender.sendMessage("§8--------------------------------");
             sender.sendMessage("§a§lCONVERSION COMPLETED");
+            sender.sendMessage("§a[VALID] Resource pack validation passed.");
             sender.sendMessage("§7Bones: §f" + result.boneCount());
             sender.sendMessage("§7Animations: §f" + result.animationCount());
             sender.sendMessage("§7UV cubes: §f" + result.uvCubeCount());
@@ -304,10 +305,32 @@ public final class CommandManager implements CommandExecutor, TabCompleter {
                     + result.copiedTextureCount());
             sender.sendMessage("§7Missing textures: §f"
                     + result.missingTextureCount());
+
+            sendWarnings(sender, result.warnings());
+
             sender.sendMessage("§8--------------------------------");
             sender.sendMessage("§aMCpack created:");
             sender.sendMessage("§f" + result.mcpackFile().getPath());
             sender.sendMessage("§8--------------------------------");
+
+        } catch (BlockbenchPackPipeline.ValidationException exception) {
+            sender.sendMessage("§8--------------------------------");
+            sender.sendMessage("§c§lCONVERSION REJECTED");
+            sender.sendMessage("§c[INVALID] Resource pack validation failed.");
+            sender.sendMessage("§7Errors: §c" + exception.getErrors().size());
+
+            for (String error : exception.getErrors()) {
+                sender.sendMessage("§c- " + error);
+            }
+
+            sendWarnings(sender, exception.getWarnings());
+
+            sender.sendMessage("§cMCpack was not created.");
+            sender.sendMessage("§8--------------------------------");
+
+            plugin.getLogger().warning(
+                    "Blockbench pack validation failed for " + packName
+            );
 
         } catch (IOException exception) {
             sender.sendMessage("§cConversion failed:");
@@ -327,6 +350,30 @@ public final class CommandManager implements CommandExecutor, TabCompleter {
             );
 
             exception.printStackTrace();
+        }
+    }
+
+    private void sendWarnings(
+            CommandSender sender,
+            List<String> warnings
+    ) {
+        if (warnings == null || warnings.isEmpty()) {
+            sender.sendMessage("§a[WARNINGS] No warnings.");
+            return;
+        }
+
+        sender.sendMessage("§e[WARNINGS] " + warnings.size());
+
+        int shown = 0;
+
+        for (String warning : warnings) {
+            if (shown >= 10) {
+                sender.sendMessage("§7...and more warnings.");
+                break;
+            }
+
+            sender.sendMessage("§e- " + warning);
+            shown++;
         }
     }
 
