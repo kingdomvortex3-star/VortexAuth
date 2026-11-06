@@ -9,7 +9,6 @@ import id.vortexauth.auth.PasswordManager;
 import id.vortexauth.auth.RegistrationManager;
 import id.vortexauth.session.SessionManager;
 
-import id.vortexauth.bedrock.BedrockFormListener;
 import id.vortexauth.bedrock.BedrockFormManager;
 import id.vortexauth.bedrock.FloodgateManager;
 
@@ -24,6 +23,7 @@ import id.vortexauth.database.DatabaseManager;
 
 import id.vortexauth.listeners.AntiBotListener;
 import id.vortexauth.listeners.AntiVpnListener;
+import id.vortexauth.listeners.BedrockFormListener;
 import id.vortexauth.listeners.PlayerChatListener;
 import id.vortexauth.listeners.PlayerConnectionListener;
 import id.vortexauth.listeners.PlayerProtectionListener;
@@ -101,6 +101,7 @@ public final class VortexAuth extends JavaPlugin {
         getLogger().info("Initializing authentication engine...");
 
         passwordManager = new PasswordManager(this);
+
         accountManager = new AccountManager(
                 this,
                 databaseManager,
@@ -129,7 +130,12 @@ public final class VortexAuth extends JavaPlugin {
         getLogger().info("Initializing security systems...");
 
         ipAddressManager = new IpAddressManager(this);
-        antiBotManager = new AntiBotManager(this);
+
+        antiBotManager = new AntiBotManager(
+                this,
+                ipAddressManager
+        );
+
         antiVpnManager = new AntiVpnManager(this);
         discordWebhookManager = new DiscordWebhookManager(this);
     }
