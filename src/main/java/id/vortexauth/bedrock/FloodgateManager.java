@@ -28,15 +28,27 @@ public final class FloodgateManager {
         this.accountManager = accountManager;
 
         if (plugin.getServer().getPluginManager()
-                .getPlugin("floodgate") != null) {
-            try {
-                floodgateApi = FloodgateApi.getInstance();
-            } catch (Exception exception) {
-                plugin.getLogger().warning(
-                        "Unable to initialize Floodgate API: "
-                                + exception.getMessage()
-                );
-            }
+                .getPlugin("floodgate") == null) {
+            plugin.getLogger().info(
+                    "Floodgate not installed. Bedrock support disabled."
+            );
+            return;
+        }
+
+        try {
+            floodgateApi = FloodgateApi.getInstance();
+
+            plugin.getLogger().info(
+                    "Floodgate API connected successfully."
+            );
+
+        } catch (Exception exception) {
+            floodgateApi = null;
+
+            plugin.getLogger().warning(
+                    "Unable to initialize Floodgate API: "
+                            + exception.getMessage()
+            );
         }
     }
 
@@ -74,13 +86,16 @@ public final class FloodgateManager {
 
             String xuid = floodgatePlayer.getXuid();
 
-            return SecurityUtils.isValidXuid(xuid)
-                    ? xuid
-                    : null;
+            if (!SecurityUtils.isValidXuid(xuid)) {
+                return null;
+            }
+
+            return xuid;
 
         } catch (Exception exception) {
             plugin.getLogger().warning(
-                    "Failed to retrieve Floodgate XUID."
+                    "Failed to retrieve Floodgate XUID: "
+                            + exception.getClass().getSimpleName()
             );
 
             return null;
