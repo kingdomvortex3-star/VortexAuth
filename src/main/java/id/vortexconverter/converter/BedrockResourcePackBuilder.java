@@ -27,16 +27,22 @@ public final class BedrockResourcePackBuilder {
     ) throws IOException {
 
         if (conversion == null) {
-            throw new IOException("Conversion result cannot be null.");
+            throw new IOException(
+                    "Conversion result cannot be null."
+            );
         }
 
         if (conversion.geometryFile() == null
                 || !conversion.geometryFile().isFile()) {
-            throw new IOException("Geometry file does not exist.");
+            throw new IOException(
+                    "Geometry file does not exist."
+            );
         }
 
         if (outputDirectory == null) {
-            throw new IOException("Output directory cannot be null.");
+            throw new IOException(
+                    "Output directory cannot be null."
+            );
         }
 
         String safeName = sanitize(packName);
@@ -45,7 +51,6 @@ public final class BedrockResourcePackBuilder {
                 .resolve(safeName);
 
         Files.createDirectories(packRoot);
-
         createDirectories(packRoot);
 
         JsonObject manifest = createManifest(
@@ -77,14 +82,30 @@ public final class BedrockResourcePackBuilder {
                     continue;
                 }
 
-                String fileName = animation.getName();
-
                 Path destination = packRoot
                         .resolve("animations")
-                        .resolve(fileName);
+                        .resolve(animation.getName());
 
                 copyFile(animation.toPath(), destination);
                 copiedAnimations++;
+            }
+        }
+
+        int copiedTextures = 0;
+
+        if (conversion.textureFiles() != null) {
+            for (File texture : conversion.textureFiles()) {
+                if (texture == null || !texture.isFile()) {
+                    continue;
+                }
+
+                Path destination = packRoot
+                        .resolve("textures")
+                        .resolve("entity")
+                        .resolve(texture.getName());
+
+                copyFile(texture.toPath(), destination);
+                copiedTextures++;
             }
         }
 
@@ -92,7 +113,8 @@ public final class BedrockResourcePackBuilder {
                 packRoot.toFile(),
                 packRoot.resolve("manifest.json").toFile(),
                 geometryDestination.toFile(),
-                copiedAnimations
+                copiedAnimations,
+                copiedTextures
         );
     }
 
@@ -218,8 +240,10 @@ public final class BedrockResourcePackBuilder {
             return "VortexPack";
         }
 
-        String result = value
-                .replaceAll("[^a-zA-Z0-9_-]", "_");
+        String result = value.replaceAll(
+                "[^a-zA-Z0-9_-]",
+                "_"
+        );
 
         return result.isBlank() ? "VortexPack" : result;
     }
@@ -228,6 +252,7 @@ public final class BedrockResourcePackBuilder {
             File packDirectory,
             File manifestFile,
             File geometryFile,
-            int animationCount
+            int animationCount,
+            int textureCount
     ) {}
 }
