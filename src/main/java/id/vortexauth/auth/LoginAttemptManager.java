@@ -14,8 +14,6 @@ public final class LoginAttemptManager {
     private final Map<UUID, AttemptData> attempts =
             new ConcurrentHashMap<>();
 
-    private static final long DEFAULT_LOCK_DURATION = 300_000L;
-
     public LoginAttemptManager(VortexAuth plugin) {
         this.plugin = plugin;
     }
@@ -44,7 +42,7 @@ public final class LoginAttemptManager {
             return false;
         }
 
-        final long now = System.currentTimeMillis();
+        long now = System.currentTimeMillis();
 
         AttemptData updated = attempts.compute(uuid, (key, old) -> {
             if (old != null && old.lockedUntil() > now) {
@@ -75,11 +73,9 @@ public final class LoginAttemptManager {
     }
 
     public void resetAttempts(UUID uuid) {
-        if (uuid == null) {
-            return;
+        if (uuid != null) {
+            attempts.remove(uuid);
         }
-
-        attempts.remove(uuid);
     }
 
     public int getAttempts(UUID uuid) {
@@ -136,6 +132,10 @@ public final class LoginAttemptManager {
         return remaining;
     }
 
+    public long getRemainingLockTime(UUID uuid) {
+        return getRemainingLockMillis(uuid);
+    }
+
     public int cleanupExpiredAttempts() {
         long now = System.currentTimeMillis();
         int removed = 0;
@@ -146,11 +146,9 @@ public final class LoginAttemptManager {
             AttemptData data = entry.getValue();
 
             if (data.lockedUntil() > 0
-                    && data.lockedUntil() <= now) {
-
-                if (attempts.remove(entry.getKey(), data)) {
-                    removed++;
-                }
+                    && data.lockedUntil() <= now
+                    && attempts.remove(entry.getKey(), data)) {
+                removed++;
             }
         }
 
@@ -173,7 +171,7 @@ public final class LoginAttemptManager {
         return Math.min(seconds, 86_400L) * 1000L;
     }
 
-    private record AttemptData(
+    public record AttemptData(
             int count,
             long lockedUntil
     ) {
