@@ -29,12 +29,14 @@ public final class LoginAttemptManager {
             return false;
         }
 
-        if (data.lockedUntil() <= System.currentTimeMillis()) {
+        long now = System.currentTimeMillis();
+
+        if (data.lockedUntil() <= now && data.lockedUntil() > 0L) {
             attempts.remove(uuid, data);
             return false;
         }
 
-        return true;
+        return data.lockedUntil() > now;
     }
 
     public boolean recordFailedAttempt(UUID uuid) {
@@ -49,7 +51,13 @@ public final class LoginAttemptManager {
                 return old;
             }
 
-            int count = old == null ? 1 : old.count() + 1;
+            int count;
+
+            if (old == null || old.lockedUntil() > 0L) {
+                count = 1;
+            } else {
+                count = old.count() + 1;
+            }
 
             int maxAttempts = Math.max(
                     1,
@@ -89,7 +97,7 @@ public final class LoginAttemptManager {
             return 0;
         }
 
-        if (data.lockedUntil() > 0
+        if (data.lockedUntil() > 0L
                 && data.lockedUntil() <= System.currentTimeMillis()) {
             attempts.remove(uuid, data);
             return 0;
@@ -117,7 +125,7 @@ public final class LoginAttemptManager {
 
         AttemptData data = attempts.get(uuid);
 
-        if (data == null || data.lockedUntil() == 0L) {
+        if (data == null || data.lockedUntil() <= 0L) {
             return 0L;
         }
 
@@ -145,7 +153,7 @@ public final class LoginAttemptManager {
 
             AttemptData data = entry.getValue();
 
-            if (data.lockedUntil() > 0
+            if (data.lockedUntil() > 0L
                     && data.lockedUntil() <= now
                     && attempts.remove(entry.getKey(), data)) {
                 removed++;
