@@ -5,17 +5,20 @@ import java.io.File;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.List;
 import java.util.Objects;
 
 public class BlockbenchPackPipeline {
 
     private final BlockbenchConversionService conversionService;
     private final BedrockResourcePackBuilder resourcePackBuilder;
+    private final BedrockPackValidator packValidator;
     private final BedrockPackArchiver packArchiver;
 
     public BlockbenchPackPipeline() {
         this.conversionService = new BlockbenchConversionService();
         this.resourcePackBuilder = new BedrockResourcePackBuilder();
+        this.packValidator = new BedrockPackValidator();
         this.packArchiver = new BedrockPackArchiver();
     }
 
@@ -57,8 +60,7 @@ public class BlockbenchPackPipeline {
                 .resolve(".vortex-work")
                 .resolve(safePackName);
 
-        Path packOutputDirectory = outputPath
-                .resolve("packs");
+        Path packOutputDirectory = outputPath.resolve("packs");
 
         Files.createDirectories(workDirectory);
         Files.createDirectories(packOutputDirectory);
@@ -77,6 +79,17 @@ public class BlockbenchPackPipeline {
                         safePackName
                 );
 
+        BedrockPackValidator.ValidationResult validation =
+                packValidator.validate(build.packDirectory());
+
+        if (!validation.valid()) {
+            throw new ValidationException(
+                    "Resource pack validation failed.",
+                    validation.errors(),
+                    validation.warnings()
+            );
+        }
+
         Path mcpackFile = packArchiver.createMcpack(
                 build.packDirectory().toPath(),
                 outputPath,
@@ -91,7 +104,8 @@ public class BlockbenchPackPipeline {
                 conversion.animationCount(),
                 conversion.uvCubeCount(),
                 conversion.copiedTextureCount(),
-                conversion.missingTextureCount()
+                conversion.missingTextureCount(),
+                validation.warnings()
         );
     }
 
@@ -115,7 +129,35 @@ public class BlockbenchPackPipeline {
             int animationCount,
             int uvCubeCount,
             int copiedTextureCount,
-            int missingTextureCount
+            int missingTextureCount,
+            List<String> warnings
     ) {
+        public PipelineResult {
+            warnings = List.copyOf(warnings);
+        }
+    }
+
+    public static class ValidationException extends IOException {
+
+        private final List<String> errors;
+        private final List<String> warnings;
+
+        public ValidationException(
+                String message,
+                List<String> errors,
+                List<String> warnings
+        ) {
+            super(message);
+            this.errors = List.copyOf(errors);
+            this.warnings = List.copyOf(warnings);
+        }
+
+        public List<String> getErrors() {
+            return errors;
+        }
+
+        public List<String> getWarnings() {
+            return warnings;
+        }
     }
 }
