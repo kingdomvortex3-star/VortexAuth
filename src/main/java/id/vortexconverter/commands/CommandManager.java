@@ -197,15 +197,18 @@ public final class CommandManager implements CommandExecutor, TabCompleter {
                     : resolved.getAssets()) {
 
                 for (String missing : asset.getMissingReferences()) {
-                    if (shown++ >= 10) {
+                    if (shown >= 10) {
                         sender.sendMessage("§7...and more.");
                         break;
                     }
 
                     sender.sendMessage(
-                            "§c" + asset.getNamespace() + ":"
-                                    + asset.getId() + " -> " + missing
+                            "§c" + asset.getAsset().getNamespace() + ":"
+                                    + asset.getAsset().getId()
+                                    + " -> " + missing
                     );
+
+                    shown++;
                 }
 
                 if (shown >= 10) {
