@@ -5,7 +5,6 @@ import org.bukkit.configuration.ConfigurationSection;
 import org.bukkit.configuration.file.YamlConfiguration;
 
 import java.io.File;
-import java.io.IOException;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.LinkedHashMap;
@@ -89,10 +88,11 @@ public final class ItemsAdderConfigParser {
 
         public String getMaterial() {
             return firstProperty(
-                    "resource.material",
                     "material",
+                    "resource.material",
                     "item.material",
-                    "specific_properties.material"
+                    "specific_properties.material",
+                    "graphics.material"
             );
         }
 
@@ -100,7 +100,8 @@ public final class ItemsAdderConfigParser {
             return firstProperty(
                     "display_name",
                     "name",
-                    "item.display_name"
+                    "item.display_name",
+                    "graphics.display_name"
             );
         }
 
@@ -114,6 +115,9 @@ public final class ItemsAdderConfigParser {
 
         public String getModelPath() {
             return firstProperty(
+                    "graphics.models",
+                    "graphics.model",
+                    "graphics.model_path",
                     "resource.model_path",
                     "resource.model",
                     "resource.generate",
@@ -125,11 +129,15 @@ public final class ItemsAdderConfigParser {
 
         public String getTexturePath() {
             return firstProperty(
-                    "resource.texture",
+                    "graphics.texture",
+                    "graphics.textures",
+                    "graphics.icon",
                     "resource.textures",
-                    "resource.material",
+                    "resource.texture",
                     "textures",
-                    "texture"
+                    "texture",
+                    "texture_path",
+                    "texture_file"
             );
         }
 
