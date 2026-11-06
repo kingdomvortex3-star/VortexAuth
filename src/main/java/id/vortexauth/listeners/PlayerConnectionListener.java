@@ -3,7 +3,7 @@ package id.vortexauth.listeners;
 
 import id.vortexauth.VortexAuth;
 import id.vortexauth.auth.AuthenticationManager;
-
+import id.vortexauth.security.IpAddressManager;
 import org.bukkit.ChatColor;
 import org.bukkit.entity.Player;
 import org.bukkit.event.EventHandler;
@@ -30,15 +30,22 @@ public final class PlayerConnectionListener implements Listener {
         Player player = event.getPlayer();
 
         if (!plugin.getConfig().getBoolean(
-                "authentication.enabled", true
+                "authentication.enabled",
+                true
         )) {
+            return;
+        }
+
+        if (isValidSession(player)) {
             return;
         }
 
         if (authenticationManager.isAuthenticated(
                 player.getUniqueId()
         )) {
-            return;
+            authenticationManager.invalidateSession(
+                    player.getUniqueId()
+            );
         }
 
         player.sendMessage("");
@@ -46,27 +53,51 @@ public final class PlayerConnectionListener implements Listener {
         if (authenticationManager.isRegistered(
                 player.getUniqueId()
         )) {
-            sendMessage(
-                    player,
-                    "messages.login-required"
-            );
+            sendMessage(player, "messages.login-required");
         } else {
-            sendMessage(
-                    player,
-                    "messages.register-required"
-            );
+            sendMessage(player, "messages.register-required");
         }
 
         player.sendMessage("");
     }
 
+    private boolean isValidSession(Player player) {
+        if (!plugin.getConfig().getBoolean(
+                "session.enabled",
+                true
+        )) {
+            return false;
+        }
+
+        String ipHash = getIpHash(player);
+
+        return authenticationManager.isAuthenticated(
+                player.getUniqueId(),
+                ipHash
+        );
+    }
+
+    private String getIpHash(Player player) {
+        if (player.getAddress() == null
+                || player.getAddress().getAddress() == null) {
+            return null;
+        }
+
+        IpAddressManager manager = plugin.getIpAddressManager();
+
+        if (manager == null) {
+            return null;
+        }
+
+        return manager.hash(
+                player.getAddress().getAddress().getHostAddress()
+        );
+    }
+
     @EventHandler(priority = EventPriority.MONITOR)
     public void onPlayerQuit(PlayerQuitEvent event) {
-        Player player = event.getPlayer();
-
-        authenticationManager.logout(
-                player.getUniqueId()
-        );
+        // Session sengaja tidak dihapus agar reconnect dapat menggunakan session.
+        // Session akan kedaluwarsa sesuai konfigurasi.
     }
 
     private void sendMessage(Player player, String path) {
