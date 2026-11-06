@@ -6,8 +6,10 @@ import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.regex.Pattern;
 
 public class ItemsAdderMappingValidator {
@@ -15,20 +17,19 @@ public class ItemsAdderMappingValidator {
     private static final Pattern IDENTIFIER_PATTERN =
             Pattern.compile("[a-z0-9_.-]+:[a-z0-9_./-]+");
 
+    private static final Pattern ICON_PATTERN =
+            Pattern.compile("[a-z0-9_.-]+");
+
     public ValidationResult validate(
             ItemsAdderCustomMappingGenerator.MappingResult result
     ) {
-        List<String> errors = new ArrayList<>();
-        List<String> warnings = new ArrayList<>();
-
         if (result == null) {
-            errors.add("MappingResult tidak tersedia.");
-            return new ValidationResult(false, 0, errors, warnings);
-        }
-
-        if (result.mapping() == null) {
-            errors.add("JSON mapping tidak tersedia.");
-            return new ValidationResult(false, 0, errors, warnings);
+            return new ValidationResult(
+                    false,
+                    0,
+                    List.of("MappingResult tidak tersedia."),
+                    new ArrayList<>()
+            );
         }
 
         return validate(result.mapping());
@@ -68,6 +69,9 @@ public class ItemsAdderMappingValidator {
         }
 
         int validDefinitions = 0;
+
+        Set<String> registeredMappings = new HashSet<>();
+        Set<String> registeredBedrockIdentifiers = new HashSet<>();
 
         for (Map.Entry<String, JsonElement> entry : items.entrySet()) {
             String javaIdentifier = entry.getKey();
@@ -119,6 +123,8 @@ public class ItemsAdderMappingValidator {
                         javaIdentifier,
                         i,
                         definition,
+                        registeredMappings,
+                        registeredBedrockIdentifiers,
                         errors,
                         warnings
                 )) {
@@ -142,6 +148,8 @@ public class ItemsAdderMappingValidator {
             String javaIdentifier,
             int index,
             JsonObject definition,
+            Set<String> registeredMappings,
+            Set<String> registeredBedrockIdentifiers,
             List<String> errors,
             List<String> warnings
     ) {
@@ -196,6 +204,19 @@ public class ItemsAdderMappingValidator {
             return false;
         }
 
+        String mappingKey = javaIdentifier
+                + "#"
+                + Float.toString((float) customModelData);
+
+        if (!registeredMappings.add(mappingKey)) {
+            errors.add(
+                    prefix
+                            + ": pasangan Java item dan CMD duplikat: "
+                            + mappingKey
+            );
+            return false;
+        }
+
         JsonElement bedrockIdentifierElement =
                 definition.get("bedrock_identifier");
 
@@ -230,36 +251,94 @@ public class ItemsAdderMappingValidator {
             return false;
         }
 
-        JsonElement displayName = definition.get("display_name");
-
-        if (displayName != null
-                && !displayName.isJsonPrimitive()) {
+        if (!registeredBedrockIdentifiers.add(bedrockIdentifier)) {
             errors.add(
                     prefix
-                            + ": display_name harus berupa string atau "
-                            + "JSON text component."
+                            + ": bedrock_identifier duplikat: "
+                            + bedrockIdentifier
             );
             return false;
         }
 
+        JsonElement bedrockOptionsElement =
+                definition.get("bedrock_options");
+
+        if (bedrockOptionsElement == null
+                || !bedrockOptionsElement.isJsonObject()) {
+            errors.add(
+                    prefix
+                            + ": bedrock_options wajib berupa JSON object."
+            );
+            return false;
+        }
+
+        JsonObject bedrockOptions =
+                bedrockOptionsElement.getAsJsonObject();
+
+        JsonElement iconElement = bedrockOptions.get("icon");
+
+        if (iconElement == null
+                || !iconElement.isJsonPrimitive()
+                || !iconElement.getAsJsonPrimitive().isString()) {
+            errors.add(
+                    prefix
+                            + ": bedrock_options.icon wajib berupa string."
+            );
+            return false;
+        }
+
+        String icon = iconElement.getAsString();
+
+        if (!ICON_PATTERN.matcher(icon).matches()) {
+            errors.add(
+                    prefix
+                            + ": format bedrock_options.icon tidak valid: "
+                            + icon
+            );
+            return false;
+        }
+
+        String expectedIcon = toIconKey(bedrockIdentifier);
+
+        if (!icon.equals(expectedIcon)) {
+            errors.add(
+                    prefix
+                            + ": icon tidak cocok. Seharusnya "
+                            + expectedIcon
+                            + ", tetapi ditemukan "
+                            + icon + "."
+            );
+            return false;
+        }
+
+        JsonElement displayName = definition.get("display_name");
+
         if (displayName != null
-                && displayName.isJsonPrimitive()
-                && !displayName.getAsJsonPrimitive().isString()
-                && !displayName.getAsJsonPrimitive().isNumber()
-                && !displayName.getAsJsonPrimitive().isBoolean()) {
-            errors.add(prefix + ": display_name tidak valid.");
+                && (!displayName.isJsonPrimitive()
+                || !displayName.getAsJsonPrimitive().isString())) {
+            errors.add(
+                    prefix
+                            + ": display_name harus berupa string."
+            );
             return false;
         }
 
         warnings.add(
                 prefix
-                        + ": pastikan Bedrock resource pack menyediakan "
-                        + "item "
-                        + bedrockIdentifier
-                        + "."
+                        + ": pastikan texture atlas menyediakan key "
+                        + expectedIcon + "."
         );
 
         return true;
+    }
+
+    private String toIconKey(String identifier) {
+        return identifier
+                .replace(':', '.')
+                .replace('/', '_')
+                .replace('\\', '_')
+                .replaceAll("[^a-zA-Z0-9_.-]", "_")
+                .toLowerCase(java.util.Locale.ROOT);
     }
 
     private boolean isValidIdentifier(String identifier) {
