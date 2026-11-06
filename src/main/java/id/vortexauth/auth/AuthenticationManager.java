@@ -53,12 +53,8 @@ public final class AuthenticationManager {
         }
 
         return registrationManager.register(
-                uuid,
-                username,
-                password,
-                confirmation,
-                platform,
-                xuid
+                uuid, username, password,
+                confirmation, platform, xuid
         );
     }
 
@@ -90,10 +86,10 @@ public final class AuthenticationManager {
         }
 
         try {
-            Optional<AccountManager.Account> optionalAccount =
+            Optional<AccountManager.Account> optional =
                     accountManager.getAccount(uuid);
 
-            if (optionalAccount.isEmpty()) {
+            if (optional.isEmpty()) {
                 return AuthResult.NOT_REGISTERED;
             }
 
@@ -118,7 +114,6 @@ public final class AuthenticationManager {
                     "Database authentication error: "
                             + exception.getMessage()
             );
-
             return AuthResult.DATABASE_ERROR;
 
         } catch (Exception exception) {
@@ -126,7 +121,6 @@ public final class AuthenticationManager {
                     "Unexpected authentication error: "
                             + exception.getMessage()
             );
-
             return AuthResult.INTERNAL_ERROR;
         }
     }
@@ -141,14 +135,10 @@ public final class AuthenticationManager {
     }
 
     public boolean isAuthenticated(UUID uuid) {
-        return uuid != null
-                && sessionManager.isAuthenticated(uuid);
+        return uuid != null && sessionManager.isAuthenticated(uuid);
     }
 
-    public boolean isAuthenticated(
-            UUID uuid,
-            String ipHash
-    ) {
+    public boolean isAuthenticated(UUID uuid, String ipHash) {
         return uuid != null
                 && sessionManager.isAuthenticated(uuid, ipHash);
     }
@@ -162,7 +152,7 @@ public final class AuthenticationManager {
             return accountManager.exists(uuid);
         } catch (SQLException exception) {
             plugin.getLogger().severe(
-                    "Failed to check account registration: "
+                    "Unable to check account registration: "
                             + exception.getMessage()
             );
             return false;
@@ -170,24 +160,19 @@ public final class AuthenticationManager {
     }
 
     public boolean isLocked(UUID uuid) {
-        return uuid != null
-                && loginAttemptManager.isLocked(uuid);
+        return uuid != null && loginAttemptManager.isLocked(uuid);
     }
 
     public int getRemainingAttempts(UUID uuid) {
-        return uuid == null
-                ? 0
-                : loginAttemptManager.getRemainingAttempts(uuid);
+        return loginAttemptManager.getRemainingAttempts(uuid);
     }
 
     public long getRemainingLockTime(UUID uuid) {
-        return uuid == null
-                ? 0L
-                : loginAttemptManager.getRemainingLockTime(uuid);
+        return loginAttemptManager.getRemainingLockTime(uuid);
     }
 
     public void createBedrockSession(UUID uuid, String ipHash) {
-        if (uuid == null || ipHash == null) {
+        if (uuid == null) {
             return;
         }
 
@@ -235,4 +220,4 @@ public final class AuthenticationManager {
     public void shutdown() {
         sessionManager.invalidateAll();
     }
-}
+            }
