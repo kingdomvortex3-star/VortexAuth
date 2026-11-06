@@ -3,7 +3,7 @@ package id.vortexauth.auth;
 
 import id.vortexauth.VortexAuth;
 import id.vortexauth.database.DatabaseManager;
-import id.vortexauth.security.SecurityUtils;
+import id.vortexauth.utils.SecurityUtils;
 
 import org.mindrot.jbcrypt.BCrypt;
 
@@ -17,6 +17,8 @@ import java.util.Optional;
 import java.util.UUID;
 
 public final class AccountManager {
+
+    private static final String TABLE = "vortexauth_accounts";
 
     private final VortexAuth plugin;
     private final DatabaseManager databaseManager;
@@ -40,10 +42,8 @@ public final class AccountManager {
             String xuid
     ) throws SQLException {
 
-        if (uuid == null
-                || username == null
-                || password == null
-                || platform == null) {
+        if (uuid == null || username == null
+                || password == null || platform == null) {
             return false;
         }
 
@@ -55,11 +55,8 @@ public final class AccountManager {
             return false;
         }
 
-        if (!SecurityUtils.isValidUsername(username)) {
-            return false;
-        }
-
-        if (!isPasswordValid(password)) {
+        if (!SecurityUtils.isValidUsername(username)
+                || !isPasswordValid(password)) {
             return false;
         }
 
@@ -71,24 +68,17 @@ public final class AccountManager {
             xuid = null;
         }
 
-        if (exists(uuid)) {
+        if (exists(uuid)
+                || getAccountByUsername(username).isPresent()
+                || (xuid != null && getAccountByXuid(xuid).isPresent())) {
             return false;
         }
 
-        if (getAccountByUsername(username).isPresent()) {
-            return false;
-        }
-
-        if (xuid != null && getAccountByXuid(xuid).isPresent()) {
-            return false;
-        }
-
-        int strength = plugin.getConfig().getInt(
-                "authentication.password.bcrypt-strength",
-                12
-        );
-
-        strength = Math.max(10, Math.min(14, strength));
+        int strength = Math.max(10, Math.min(14,
+                plugin.getConfig().getInt(
+                        "authentication.password.bcrypt-strength", 12
+                )
+        ));
 
         String passwordHash = BCrypt.hashpw(
                 password,
@@ -96,24 +86,17 @@ public final class AccountManager {
         );
 
         String sql = """
-                INSERT INTO accounts (
-                    uuid,
-                    username,
-                    password_hash,
-                    platform,
-                    xuid,
-                    premium_enabled,
-                    premium_verified,
-                    created_at,
-                    last_login
+                INSERT INTO vortexauth_accounts (
+                    uuid, username, password_hash, platform, xuid,
+                    premium_enabled, premium_verified,
+                    created_at, last_login
                 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """;
 
         long now = System.currentTimeMillis();
 
         try (Connection connection = databaseManager.getConnection();
-             PreparedStatement statement =
-                     connection.prepareStatement(sql)) {
+             PreparedStatement statement = connection.prepareStatement(sql)) {
 
             statement.setString(1, uuid.toString());
             statement.setString(2, username);
@@ -129,34 +112,27 @@ public final class AccountManager {
         }
     }
 
-    public boolean login(
-            UUID uuid,
-            String password
-    ) throws SQLException {
+    public boolean login(UUID uuid, String password)
+            throws SQLException {
 
         if (uuid == null || password == null) {
             return false;
         }
 
-        Optional<Account> optionalAccount = getAccount(uuid);
+        Optional<Account> optional = getAccount(uuid);
 
-        if (optionalAccount.isEmpty()) {
+        if (optional.isEmpty()) {
             return false;
         }
-
-        Account account = optionalAccount.get();
 
         boolean valid;
 
         try {
             valid = BCrypt.checkpw(
                     password,
-                    account.passwordHash()
+                    optional.get().passwordHash()
             );
         } catch (IllegalArgumentException exception) {
-            plugin.getLogger().warning(
-                    "Invalid password hash for account " + uuid
-            );
             return false;
         }
 
@@ -176,25 +152,18 @@ public final class AccountManager {
         }
 
         String sql = """
-                SELECT uuid, username, password_hash, platform,
-                       xuid, premium_enabled, premium_verified,
-                       created_at, last_login
-                FROM accounts
-                WHERE uuid = ?
+                SELECT * FROM vortexauth_accounts WHERE uuid = ?
                 """;
 
         try (Connection connection = databaseManager.getConnection();
-             PreparedStatement statement =
-                     connection.prepareStatement(sql)) {
+             PreparedStatement statement = connection.prepareStatement(sql)) {
 
             statement.setString(1, uuid.toString());
 
             try (ResultSet result = statement.executeQuery()) {
-                if (!result.next()) {
-                    return Optional.empty();
-                }
-
-                return Optional.of(readAccount(result));
+                return result.next()
+                        ? Optional.of(readAccount(result))
+                        : Optional.empty();
             }
         }
     }
@@ -207,25 +176,19 @@ public final class AccountManager {
         }
 
         String sql = """
-                SELECT uuid, username, password_hash, platform,
-                       xuid, premium_enabled, premium_verified,
-                       created_at, last_login
-                FROM accounts
+                SELECT * FROM vortexauth_accounts
                 WHERE LOWER(username) = LOWER(?)
                 """;
 
         try (Connection connection = databaseManager.getConnection();
-             PreparedStatement statement =
-                     connection.prepareStatement(sql)) {
+             PreparedStatement statement = connection.prepareStatement(sql)) {
 
             statement.setString(1, username);
 
             try (ResultSet result = statement.executeQuery()) {
-                if (!result.next()) {
-                    return Optional.empty();
-                }
-
-                return Optional.of(readAccount(result));
+                return result.next()
+                        ? Optional.of(readAccount(result))
+                        : Optional.empty();
             }
         }
     }
@@ -238,25 +201,18 @@ public final class AccountManager {
         }
 
         String sql = """
-                SELECT uuid, username, password_hash, platform,
-                       xuid, premium_enabled, premium_verified,
-                       created_at, last_login
-                FROM accounts
-                WHERE xuid = ?
+                SELECT * FROM vortexauth_accounts WHERE xuid = ?
                 """;
 
         try (Connection connection = databaseManager.getConnection();
-             PreparedStatement statement =
-                     connection.prepareStatement(sql)) {
+             PreparedStatement statement = connection.prepareStatement(sql)) {
 
             statement.setString(1, xuid);
 
             try (ResultSet result = statement.executeQuery()) {
-                if (!result.next()) {
-                    return Optional.empty();
-                }
-
-                return Optional.of(readAccount(result));
+                return result.next()
+                        ? Optional.of(readAccount(result))
+                        : Optional.empty();
             }
         }
     }
@@ -267,15 +223,12 @@ public final class AccountManager {
         }
 
         String sql = """
-                SELECT 1
-                FROM accounts
-                WHERE uuid = ?
-                LIMIT 1
+                SELECT 1 FROM vortexauth_accounts
+                WHERE uuid = ? LIMIT 1
                 """;
 
         try (Connection connection = databaseManager.getConnection();
-             PreparedStatement statement =
-                     connection.prepareStatement(sql)) {
+             PreparedStatement statement = connection.prepareStatement(sql)) {
 
             statement.setString(1, uuid.toString());
 
@@ -291,14 +244,12 @@ public final class AccountManager {
         }
 
         String sql = """
-                UPDATE accounts
-                SET last_login = ?
-                WHERE uuid = ?
+                UPDATE vortexauth_accounts
+                SET last_login = ? WHERE uuid = ?
                 """;
 
         try (Connection connection = databaseManager.getConnection();
-             PreparedStatement statement =
-                     connection.prepareStatement(sql)) {
+             PreparedStatement statement = connection.prepareStatement(sql)) {
 
             statement.setLong(1, System.currentTimeMillis());
             statement.setString(2, uuid.toString());
@@ -317,15 +268,13 @@ public final class AccountManager {
         }
 
         String sql = """
-                UPDATE accounts
-                SET premium_enabled = ?,
-                    premium_verified = ?
+                UPDATE vortexauth_accounts
+                SET premium_enabled = ?, premium_verified = ?
                 WHERE uuid = ?
                 """;
 
         try (Connection connection = databaseManager.getConnection();
-             PreparedStatement statement =
-                     connection.prepareStatement(sql)) {
+             PreparedStatement statement = connection.prepareStatement(sql)) {
 
             statement.setBoolean(1, enabled);
             statement.setBoolean(2, verified);
@@ -340,58 +289,51 @@ public final class AccountManager {
             String newPassword
     ) throws SQLException {
 
-        if (uuid == null
-                || oldPassword == null
+        if (uuid == null || oldPassword == null
                 || newPassword == null) {
             return false;
         }
 
-        Optional<Account> optionalAccount = getAccount(uuid);
+        Optional<Account> optional = getAccount(uuid);
 
-        if (optionalAccount.isEmpty()) {
+        if (optional.isEmpty()) {
             return false;
         }
 
-        Account account = optionalAccount.get();
-
-        boolean oldPasswordValid;
-
         try {
-            oldPasswordValid = BCrypt.checkpw(
+            if (!BCrypt.checkpw(
                     oldPassword,
-                    account.passwordHash()
-            );
+                    optional.get().passwordHash())) {
+                return false;
+            }
         } catch (IllegalArgumentException exception) {
             return false;
         }
 
-        if (!oldPasswordValid || !isPasswordValid(newPassword)) {
+        if (!isPasswordValid(newPassword)) {
             return false;
         }
 
-        int strength = plugin.getConfig().getInt(
-                "authentication.password.bcrypt-strength",
-                12
-        );
+        int strength = Math.max(10, Math.min(14,
+                plugin.getConfig().getInt(
+                        "authentication.password.bcrypt-strength", 12
+                )
+        ));
 
-        strength = Math.max(10, Math.min(14, strength));
-
-        String newHash = BCrypt.hashpw(
+        String hash = BCrypt.hashpw(
                 newPassword,
                 BCrypt.gensalt(strength)
         );
 
         String sql = """
-                UPDATE accounts
-                SET password_hash = ?
-                WHERE uuid = ?
+                UPDATE vortexauth_accounts
+                SET password_hash = ? WHERE uuid = ?
                 """;
 
         try (Connection connection = databaseManager.getConnection();
-             PreparedStatement statement =
-                     connection.prepareStatement(sql)) {
+             PreparedStatement statement = connection.prepareStatement(sql)) {
 
-            statement.setString(1, newHash);
+            statement.setString(1, hash);
             statement.setString(2, uuid.toString());
 
             return statement.executeUpdate() == 1;
@@ -399,28 +341,19 @@ public final class AccountManager {
     }
 
     private boolean isPasswordValid(String password) {
-        if (password == null) {
-            return false;
-        }
-
         int minimum = plugin.getConfig().getInt(
-                "authentication.register.min-password-length",
-                6
+                "authentication.register.min-password-length", 6
         );
 
         int maximum = plugin.getConfig().getInt(
-                "authentication.register.max-password-length",
-                32
+                "authentication.register.max-password-length", 32
         );
 
-        int length = password.length();
-        int byteLength = password.getBytes(
-                StandardCharsets.UTF_8
-        ).length;
+        int bytes = password.getBytes(StandardCharsets.UTF_8).length;
 
-        return length >= minimum
-                && length <= maximum
-                && byteLength <= 72;
+        return password.length() >= minimum
+                && password.length() <= maximum
+                && bytes <= 72;
     }
 
     private Account readAccount(ResultSet result)
