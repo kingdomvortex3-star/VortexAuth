@@ -3,10 +3,10 @@ package id.vortexconverter.mappings;
 
 import com.google.gson.JsonArray;
 import com.google.gson.JsonObject;
-import com.google.gson.JsonPrimitive;
 
 import id.vortexconverter.scanner.ItemsAdderConfigParser;
 
+import java.io.File;
 import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
@@ -35,17 +35,11 @@ public class ItemsAdderCustomMappingGenerator {
             warnings.add("ParseResult tidak tersedia.");
 
             return new MappingResult(
-                    mapping,
-                    0,
-                    0,
-                    skipped,
-                    warnings,
-                    null
+                    mapping, 0, 0, skipped, warnings, null
             );
         }
 
         for (ItemsAdderConfigParser.AssetInfo asset : parseResult.getAssets()) {
-
             if (asset.getType() != ItemsAdderConfigParser.AssetType.ITEM) {
                 continue;
             }
@@ -55,20 +49,16 @@ public class ItemsAdderCustomMappingGenerator {
             String javaIdentifier = asset.getJavaIdentifier();
 
             if (javaIdentifier == null || javaIdentifier.isBlank()) {
-                skipped.add(
-                        asset.getNamespacedId()
-                                + ": Java item identifier tidak ditemukan."
-                );
+                skipped.add(asset.getNamespacedId()
+                        + ": Java item identifier tidak ditemukan.");
                 continue;
             }
 
             String customModelDataText = asset.getCustomModelDataValue();
 
             if (customModelDataText == null || customModelDataText.isBlank()) {
-                skipped.add(
-                        asset.getNamespacedId()
-                                + ": Custom Model Data tidak ditemukan."
-                );
+                skipped.add(asset.getNamespacedId()
+                        + ": Custom Model Data tidak ditemukan.");
                 continue;
             }
 
@@ -79,54 +69,40 @@ public class ItemsAdderCustomMappingGenerator {
                         customModelDataText.trim()
                 );
             } catch (NumberFormatException exception) {
-                skipped.add(
-                        asset.getNamespacedId()
-                                + ": Custom Model Data tidak valid: "
-                                + customModelDataText
-                );
+                skipped.add(asset.getNamespacedId()
+                        + ": Custom Model Data tidak valid: "
+                        + customModelDataText);
                 continue;
             }
 
             if (!Float.isFinite(customModelData) || customModelData < 0) {
-                skipped.add(
-                        asset.getNamespacedId()
-                                + ": Custom Model Data harus berupa angka "
-                                + "positif atau nol."
-                );
+                skipped.add(asset.getNamespacedId()
+                        + ": Custom Model Data harus berupa angka positif atau nol.");
                 continue;
             }
 
-            String bedrockIdentifier =
-                    asset.getExplicitBedrockIdentifier();
+            String bedrockIdentifier = asset.getExplicitBedrockIdentifier();
 
             if (bedrockIdentifier == null || bedrockIdentifier.isBlank()) {
-                String namespace = asset.getNamespace();
-                String itemId = asset.getId();
-
                 bedrockIdentifier = "vortexconverter:"
-                        + namespace.toLowerCase(Locale.ROOT)
+                        + asset.getNamespace().toLowerCase(Locale.ROOT)
                         + "_"
-                        + itemId.toLowerCase(Locale.ROOT);
+                        + asset.getId().toLowerCase(Locale.ROOT);
             }
 
             bedrockIdentifier = bedrockIdentifier.trim()
                     .toLowerCase(Locale.ROOT);
 
             if (!isValidBedrockIdentifier(bedrockIdentifier)) {
-                skipped.add(
-                        asset.getNamespacedId()
-                                + ": Bedrock identifier tidak valid: "
-                                + bedrockIdentifier
-                );
+                skipped.add(asset.getNamespacedId()
+                        + ": Bedrock identifier tidak valid: "
+                        + bedrockIdentifier);
                 continue;
             }
 
             if (bedrockIdentifier.startsWith("minecraft:")) {
-                skipped.add(
-                        asset.getNamespacedId()
-                                + ": Bedrock identifier tidak boleh "
-                                + "menggunakan namespace minecraft."
-                );
+                skipped.add(asset.getNamespacedId()
+                        + ": Namespace minecraft tidak diperbolehkan.");
                 continue;
             }
 
@@ -135,46 +111,26 @@ public class ItemsAdderCustomMappingGenerator {
                     + Float.toString(customModelData);
 
             if (!registeredMappings.add(duplicateKey)) {
-                skipped.add(
-                        asset.getNamespacedId()
-                                + ": Mapping duplikat untuk "
-                                + duplicateKey
-                );
+                skipped.add(asset.getNamespacedId()
+                        + ": Mapping duplikat untuk "
+                        + duplicateKey);
                 continue;
             }
 
             JsonObject definition = new JsonObject();
-
             definition.addProperty("type", "legacy");
-            definition.addProperty(
-                    "custom_model_data",
-                    customModelData
-            );
-            definition.addProperty(
-                    "bedrock_identifier",
-                    bedrockIdentifier
-            );
+            definition.addProperty("custom_model_data", customModelData);
+            definition.addProperty("bedrock_identifier", bedrockIdentifier);
 
             String displayName = asset.getDisplayName();
 
             if (displayName != null && !displayName.isBlank()) {
-                definition.addProperty(
-                        "display_name",
-                        displayName
-                );
+                definition.addProperty("display_name", displayName);
             }
 
             JsonArray definitions;
 
             if (items.has(javaIdentifier)) {
-                if (!items.get(javaIdentifier).isJsonArray()) {
-                    warnings.add(
-                            "Struktur mapping tidak valid untuk "
-                                    + javaIdentifier
-                    );
-                    continue;
-                }
-
                 definitions = items.getAsJsonArray(javaIdentifier);
             } else {
                 definitions = new JsonArray();
@@ -202,20 +158,15 @@ public class ItemsAdderCustomMappingGenerator {
 
         String[] parts = identifier.split(":", -1);
 
-        if (parts.length != 2) {
-            return false;
-        }
-
-        return isValidIdentifierPart(parts[0])
+        return parts.length == 2
+                && isValidIdentifierPart(parts[0])
                 && isValidIdentifierPart(parts[1]);
     }
 
     private boolean isValidIdentifierPart(String value) {
-        if (value == null || value.isBlank()) {
-            return false;
-        }
-
-        return value.matches("[a-z0-9_.-/]+");
+        return value != null
+                && !value.isBlank()
+                && value.matches("[a-z0-9_.-/]+");
     }
 
     public record MappingResult(
@@ -224,7 +175,7 @@ public class ItemsAdderCustomMappingGenerator {
             int generatedMappings,
             List<String> skipped,
             List<String> warnings,
-            java.io.File outputFile
+            File outputFile
     ) {
 
         public MappingResult(
@@ -244,10 +195,19 @@ public class ItemsAdderCustomMappingGenerator {
             );
         }
 
+        public int skippedCount() {
+            return skipped == null ? 0 : skipped.size();
+        }
+
+        public int warningCount() {
+            return warnings == null ? 0 : warnings.size();
+        }
+
         public boolean hasMappings() {
             return generatedMappings > 0
                     && mapping != null
                     && mapping.has("items")
+                    && mapping.get("items").isJsonObject()
                     && mapping.getAsJsonObject("items").size() > 0;
         }
 
@@ -255,7 +215,7 @@ public class ItemsAdderCustomMappingGenerator {
             return hasMappings();
         }
 
-        public MappingResult withOutputFile(java.io.File file) {
+        public MappingResult withOutputFile(File file) {
             return new MappingResult(
                     mapping,
                     discoveredItems,
