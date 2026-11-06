@@ -146,6 +146,8 @@ public class ItemsAdderCustomMappingGenerator {
                 continue;
             }
 
+            String icon = toIconKey(bedrockIdentifier);
+
             JsonObject definition = new JsonObject();
 
             definition.addProperty("type", "legacy");
@@ -166,6 +168,14 @@ public class ItemsAdderCustomMappingGenerator {
                         displayName
                 );
             }
+
+            JsonObject bedrockOptions = new JsonObject();
+            bedrockOptions.addProperty("icon", icon);
+
+            definition.add(
+                    "bedrock_options",
+                    bedrockOptions
+            );
 
             JsonArray definitions;
 
@@ -200,6 +210,11 @@ public class ItemsAdderCustomMappingGenerator {
         warnings.add(
                 "Setiap pasangan Java item dan Custom Model Data "
                         + "hanya didaftarkan satu kali."
+        );
+
+        warnings.add(
+                "Setiap mapping memiliki bedrock_options.icon "
+                        + "yang disamakan dengan key texture atlas."
         );
 
         return new MappingResult(
@@ -260,6 +275,15 @@ public class ItemsAdderCustomMappingGenerator {
         return value.trim()
                 .toLowerCase(Locale.ROOT)
                 .replaceAll("[^a-z0-9_.-]", "_");
+    }
+
+    private String toIconKey(String identifier) {
+        return identifier
+                .replace(':', '.')
+                .replace('/', '_')
+                .replace('\\', '_')
+                .replaceAll("[^a-zA-Z0-9_.-]", "_")
+                .toLowerCase(Locale.ROOT);
     }
 
     private boolean isValidBedrockIdentifier(String identifier) {
