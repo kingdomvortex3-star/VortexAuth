@@ -1,45 +1,26 @@
 
 plugins {
     id 'java'
-    id 'com.gradleup.shadow' version '9.2.2'
 }
 
-group = 'id.vortexauth'
+group = 'id.vortexconverter'
 version = '1.0.0'
 
 base {
-    archivesName = 'VortexAuth'
+    archivesName = 'VortexConverter'
 }
 
 repositories {
     mavenCentral()
 
     maven {
-        name = 'PaperMC'
+        name = 'papermc'
         url = 'https://repo.papermc.io/repository/maven-public/'
-    }
-
-    maven {
-        name = 'GeyserMC'
-        url = 'https://repo.opencollab.dev/main/'
-    }
-
-    maven {
-        name = 'PlaceholderAPI'
-        url = 'https://repo.extendedclip.com/content/repositories/placeholderapi/'
     }
 }
 
 dependencies {
     compileOnly 'io.papermc.paper:paper-api:26.3.build.+'
-    compileOnly 'org.geysermc.floodgate:api:2.2.4-SNAPSHOT'
-    compileOnly 'me.clip:placeholderapi:2.11.6'
-
-    implementation 'org.xerial:sqlite-jdbc:3.50.3.0'
-    implementation 'com.zaxxer:HikariCP:6.3.0'
-    implementation 'com.google.code.gson:gson:2.13.1'
-    implementation 'org.mindrot:jbcrypt:0.4'
-    implementation 'com.mysql:mysql-connector-j:9.4.0'
 }
 
 java {
@@ -53,22 +34,24 @@ tasks.withType(JavaCompile).configureEach {
     options.release = 25
 }
 
-processResources {
+tasks.processResources {
     filteringCharset = 'UTF-8'
 
     filesMatching('plugin.yml') {
-        expand(version: project.version)
+        expand(
+            version: project.version
+        )
     }
 }
 
-shadowJar {
-    archiveClassifier = ''
+tasks.jar {
+    archiveFileName = "VortexConverter-${project.version}.jar"
 
-    relocate 'org.sqlite', 'id.vortexauth.libs.sqlite'
-    relocate 'com.zaxxer.hikari', 'id.vortexauth.libs.hikari'
-    relocate 'org.mindrot', 'id.vortexauth.libs.bcrypt'
-}
-
-build {
-    dependsOn shadowJar
+    manifest {
+        attributes(
+            'Implementation-Title': 'VortexConverter',
+            'Implementation-Version': project.version,
+            'Built-By': 'VortexTeam'
+        )
+    }
 }
