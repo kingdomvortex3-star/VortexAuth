@@ -3,6 +3,7 @@ package id.vortexconverter.commands;
 
 import id.vortexconverter.VortexConverter;
 import id.vortexconverter.converter.BlockbenchPackPipeline;
+import id.vortexconverter.mappings.ItemsAdderMappingService;
 import id.vortexconverter.scanner.ItemsAdderScanner;
 import id.vortexconverter.scanner.ItemsAdderConfigParser;
 import id.vortexconverter.scanner.ItemsAdderAssetResolver;
@@ -30,6 +31,7 @@ public final class CommandManager implements CommandExecutor, TabCompleter {
     private final ItemsAdderConfigParser parser;
     private final ItemsAdderAssetResolver resolver;
     private final BlockbenchPackPipeline blockbenchPipeline;
+    private final ItemsAdderMappingService mappingService;
 
     public CommandManager(VortexConverter plugin) {
         this.plugin = plugin;
@@ -37,6 +39,7 @@ public final class CommandManager implements CommandExecutor, TabCompleter {
         this.parser = new ItemsAdderConfigParser();
         this.resolver = new ItemsAdderAssetResolver();
         this.blockbenchPipeline = new BlockbenchPackPipeline();
+        this.mappingService = new ItemsAdderMappingService();
     }
 
     @Override
@@ -58,8 +61,11 @@ public final class CommandManager implements CommandExecutor, TabCompleter {
 
         switch (args[0].toLowerCase(Locale.ROOT)) {
             case "help" -> sendHelp(sender);
+
             case "scan" -> scanPlugins(sender);
+
             case "itemsadder" -> scanItemsAdder(sender);
+
             case "report" -> sendReport(sender);
 
             case "reload" -> {
@@ -68,6 +74,8 @@ public final class CommandManager implements CommandExecutor, TabCompleter {
             }
 
             case "convert" -> convertBlockbench(sender, args);
+
+            case "mappings" -> handleMappings(sender, args);
 
             default -> sender.sendMessage(
                     "§cUnknown command. Use /vortexconvert help."
@@ -88,8 +96,212 @@ public final class CommandManager implements CommandExecutor, TabCompleter {
         sender.sendMessage(
                 "§b/vortexconvert convert <file> [name] [geometry]"
         );
-        sender.sendMessage("§7Convert a Blockbench .bbmodel file");
+        sender.sendMessage(
+                "§b/vortexconvert mappings generate §7- Generate Geyser mappings"
+        );
+        sender.sendMessage(
+                "§b/vortexconvert mappings help §7- Mapping commands"
+        );
         sender.sendMessage("§8--------------------------------");
+    }
+
+    private void handleMappings(
+            CommandSender sender,
+            String[] args
+    ) {
+        if (args.length < 2) {
+            sendMappingsHelp(sender);
+            return;
+        }
+
+        switch (args[1].toLowerCase(Locale.ROOT)) {
+            case "help" -> sendMappingsHelp(sender);
+
+            case "generate" -> generateItemsAdderMappings(sender);
+
+            default -> {
+                sender.sendMessage("§cUnknown mappings command.");
+                sendMappingsHelp(sender);
+            }
+        }
+    }
+
+    private void sendMappingsHelp(CommandSender sender) {
+        sender.sendMessage("§b§lVortexConverter Mappings");
+        sender.sendMessage("§8--------------------------------");
+        sender.sendMessage(
+                "§b/vortexconvert mappings generate"
+        );
+        sender.sendMessage("§7Generate and export ItemsAdder mappings.");
+        sender.sendMessage(
+                "§b/vortexconvert mappings help"
+        );
+        sender.sendMessage("§7Show mapping commands.");
+        sender.sendMessage("§8--------------------------------");
+    }
+
+    private void generateItemsAdderMappings(CommandSender sender) {
+        Plugin itemsAdder = Bukkit.getPluginManager()
+                .getPlugin("ItemsAdder");
+
+        if (itemsAdder == null || !itemsAdder.isEnabled()) {
+            sender.sendMessage("§cItemsAdder is not installed or enabled.");
+            return;
+        }
+
+        Plugin geyser = Bukkit.getPluginManager()
+                .getPlugin("Geyser-Spigot");
+
+        if (geyser == null || !geyser.isEnabled()) {
+            geyser = Bukkit.getPluginManager().getPlugin("Geyser");
+        }
+
+        if (geyser == null || !geyser.isEnabled()) {
+            sender.sendMessage("§cGeyser is not installed or enabled.");
+            return;
+        }
+
+        File contents = new File(
+                itemsAdder.getDataFolder(),
+                "contents"
+        );
+
+        if (!contents.isDirectory()) {
+            sender.sendMessage("§cItemsAdder contents folder not found:");
+            sender.sendMessage("§7" + contents.getPath());
+            return;
+        }
+
+        File geyserData = geyser.getDataFolder();
+
+        if (geyserData == null) {
+            sender.sendMessage("§cCannot locate Geyser data folder.");
+            return;
+        }
+
+        sender.sendMessage("§8--------------------------------");
+        sender.sendMessage("§b§lVortexConverter Mappings");
+        sender.sendMessage("§7Reading ItemsAdder configurations...");
+        sender.sendMessage("§7ItemsAdder: §f" + contents.getPath());
+        sender.sendMessage("§7Geyser: §f" + geyserData.getPath());
+        sender.sendMessage("§8--------------------------------");
+
+        try {
+            ItemsAdderMappingService.ServiceResult result =
+                    mappingService.generateAndExport(
+                            contents,
+                            geyserData
+                    );
+
+            sender.sendMessage("§8--------------------------------");
+            sender.sendMessage("§b§lMAPPING REPORT");
+            sender.sendMessage("§7YAML files read: §f" + result.filesRead());
+            sender.sendMessage("§7Total assets: §f" + result.totalAssets());
+            sender.sendMessage("§7Items discovered: §f"
+                    + result.discoveredItems());
+            sender.sendMessage("§7Mappings exported: §a"
+                    + result.exportedMappings());
+            sender.sendMessage("§7Items skipped: §e"
+                    + result.skippedItems());
+            sender.sendMessage("§7Warnings: §e"
+                    + result.warningCount());
+            sender.sendMessage("§7Parse errors: §c"
+                    + result.parseErrorCount());
+
+            if (result.hasOutput()) {
+                sender.sendMessage("§8--------------------------------");
+                sender.sendMessage("§aMapping file created:");
+                sender.sendMessage("§f" + result.outputFile().getPath());
+            }
+
+            if (!result.skippedDetails().isEmpty()) {
+                sender.sendMessage("§8--------------------------------");
+                sender.sendMessage("§e[SKIPPED ITEMS]");
+
+                int shown = 0;
+
+                for (String detail : result.skippedDetails()) {
+                    if (shown >= 10) {
+                        sender.sendMessage("§7...and more skipped items.");
+                        break;
+                    }
+
+                    sender.sendMessage("§e- " + detail);
+                    shown++;
+                }
+            }
+
+            if (!result.warnings().isEmpty()) {
+                sender.sendMessage("§8--------------------------------");
+                sender.sendMessage("§e[WARNINGS]");
+
+                int shown = 0;
+
+                for (String warning : result.warnings()) {
+                    if (shown >= 10) {
+                        sender.sendMessage("§7...and more warnings.");
+                        break;
+                    }
+
+                    sender.sendMessage("§e- " + warning);
+                    shown++;
+                }
+            }
+
+            if (!result.parseErrors().isEmpty()) {
+                sender.sendMessage("§8--------------------------------");
+                sender.sendMessage("§c[CONFIG ERRORS]");
+
+                int shown = 0;
+
+                for (String error : result.parseErrors()) {
+                    if (shown >= 10) {
+                        sender.sendMessage("§7...and more errors.");
+                        break;
+                    }
+
+                    sender.sendMessage("§c- " + error);
+                    shown++;
+                }
+            }
+
+            if (result.successful()) {
+                sender.sendMessage("§8--------------------------------");
+                sender.sendMessage("§a§lMAPPING GENERATION COMPLETED");
+                sender.sendMessage(
+                        "§7Geyser may need a restart or reload "
+                                + "to load the new mapping."
+                );
+            } else {
+                sender.sendMessage("§8--------------------------------");
+                sender.sendMessage("§cNo mappings were exported.");
+                sender.sendMessage(
+                        "§7Check the ItemsAdder material and "
+                                + "custom_model_data settings."
+                );
+            }
+
+            sender.sendMessage("§8--------------------------------");
+
+        } catch (IOException exception) {
+            sender.sendMessage("§cMapping generation failed:");
+            sender.sendMessage("§7" + exception.getMessage());
+
+            plugin.getLogger().severe(
+                    "ItemsAdder mapping export failed: "
+                            + exception.getMessage()
+            );
+
+        } catch (Exception exception) {
+            sender.sendMessage("§cUnexpected mapping error.");
+            sender.sendMessage("§7Check the server console.");
+
+            plugin.getLogger().severe(
+                    "Unexpected ItemsAdder mapping error:"
+            );
+
+            exception.printStackTrace();
+        }
     }
 
     private void scanPlugins(CommandSender sender) {
@@ -417,23 +629,26 @@ public final class CommandManager implements CommandExecutor, TabCompleter {
         }
 
         if (args.length == 1) {
-            String input = args[0].toLowerCase(Locale.ROOT);
-            List<String> suggestions = new ArrayList<>();
+            return filter(
+                    args[0],
+                    List.of(
+                            "help",
+                            "scan",
+                            "itemsadder",
+                            "report",
+                            "reload",
+                            "convert",
+                            "mappings"
+                    )
+            );
+        }
 
-            for (String option : List.of(
-                    "help",
-                    "scan",
-                    "itemsadder",
-                    "report",
-                    "reload",
-                    "convert"
-            )) {
-                if (option.startsWith(input)) {
-                    suggestions.add(option);
-                }
-            }
-
-            return suggestions;
+        if (args.length == 2
+                && args[0].equalsIgnoreCase("mappings")) {
+            return filter(
+                    args[1],
+                    List.of("help", "generate")
+            );
         }
 
         if (args.length == 2
@@ -446,8 +661,8 @@ public final class CommandManager implements CommandExecutor, TabCompleter {
                 return List.of();
             }
 
-            String input = args[1].toLowerCase(Locale.ROOT);
             List<String> suggestions = new ArrayList<>();
+            String input = args[1].toLowerCase(Locale.ROOT);
 
             for (File file : files) {
                 if (file.isFile()
@@ -455,7 +670,6 @@ public final class CommandManager implements CommandExecutor, TabCompleter {
                         .endsWith(".bbmodel")
                         && file.getName().toLowerCase(Locale.ROOT)
                         .startsWith(input)) {
-
                     suggestions.add(file.getName());
                 }
             }
@@ -464,5 +678,21 @@ public final class CommandManager implements CommandExecutor, TabCompleter {
         }
 
         return List.of();
+    }
+
+    private List<String> filter(
+            String input,
+            List<String> options
+    ) {
+        String normalized = input.toLowerCase(Locale.ROOT);
+        List<String> result = new ArrayList<>();
+
+        for (String option : options) {
+            if (option.startsWith(normalized)) {
+                result.add(option);
+            }
+        }
+
+        return result;
     }
 }
