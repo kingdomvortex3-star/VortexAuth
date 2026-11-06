@@ -1,57 +1,246 @@
 
-plugins {
-    id 'java'
-}
+package id.vortexconverter.converter;
 
-group = 'id.vortexconverter'
-version = '1.0.0'
+import com.google.gson.JsonArray;
+import com.google.gson.JsonElement;
+import com.google.gson.JsonObject;
+import com.google.gson.JsonParser;
 
-base {
-    archivesName = 'VortexConverter'
-}
+import java.io.File;
+import java.io.FileReader;
+import java.io.IOException;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.List;
+import java.util.Map;
 
-repositories {
-    mavenCentral()
+public final class JavaModelReader {
 
-    maven {
-        name = 'papermc'
-        url = 'https://repo.papermc.io/repository/maven-public/'
+    public record Vector3(double x, double y, double z) {}
+
+    public record Face(
+            String direction,
+            String texture,
+            int rotation,
+            double[] uv
+    ) {}
+
+    public record Element(
+            Vector3 from,
+            Vector3 to,
+            Vector3 rotation,
+            Vector3 origin,
+            List<Face> faces
+    ) {}
+
+    public record JavaModel(
+            String parent,
+            String ambientOcclusion,
+            List<String> textures,
+            List<Element> elements
+    ) {}
+
+    public JavaModel read(File file) throws IOException {
+        if (file == null || !file.isFile()) {
+            throw new IOException("Model file does not exist.");
+        }
+
+        try (FileReader reader = new FileReader(file)) {
+            JsonObject root = JsonParser.parseReader(reader)
+                    .getAsJsonObject();
+
+            String parent = getString(root, "parent");
+            String ambient = getString(root, "ambientocclusion");
+
+            List<String> textures = readTextures(root);
+            List<Element> elements = readElements(root);
+
+            return new JavaModel(
+                    parent,
+                    ambient,
+                    Collections.unmodifiableList(textures),
+                    Collections.unmodifiableList(elements)
+            );
+        } catch (RuntimeException exception) {
+            throw new IOException(
+                    "Invalid Java model JSON: " + exception.getMessage(),
+                    exception
+            );
+        }
     }
-}
 
-dependencies {
-    compileOnly 'io.papermc.paper:paper-api:26.3.build.+'
-}
+    private List<String> readTextures(JsonObject root) {
+        List<String> textures = new ArrayList<>();
 
-java {
-    toolchain {
-        languageVersion = JavaLanguageVersion.of(25)
+        if (!root.has("textures")
+                || !root.get("textures").isJsonObject()) {
+            return textures;
+        }
+
+        for (Map.Entry<String, JsonElement> entry
+                : root.getAsJsonObject("textures").entrySet()) {
+
+            if (entry.getValue().isJsonPrimitive()) {
+                textures.add(
+                        entry.getKey() + "="
+                                + entry.getValue().getAsString()
+                );
+            }
+        }
+
+        return textures;
     }
-}
 
-tasks.withType(JavaCompile).configureEach {
-    options.encoding = 'UTF-8'
-    options.release = 25
-}
+    private List<Element> readElements(JsonObject root)
+            throws IOException {
 
-tasks.processResources {
-    filteringCharset = 'UTF-8'
+        List<Element> elements = new ArrayList<>();
 
-    filesMatching('plugin.yml') {
-        expand(
-            version: project.version
-        )
+        if (!root.has("elements")
+                || !root.get("elements").isJsonArray()) {
+            return elements;
+        }
+
+        JsonArray array = root.getAsJsonArray("elements");
+
+        for (JsonElement element : array) {
+            JsonObject object = element.getAsJsonObject();
+
+            Vector3 from = readVector(object, "from");
+            Vector3 to = readVector(object, "to");
+
+            if (from == null || to == null) {
+                throw new IOException(
+                        "Element is missing from/to coordinates."
+                );
+            }
+
+            Vector3 rotation = new Vector3(0, 0, 0);
+            Vector3 origin = new Vector3(0, 0, 0);
+
+            if (object.has("rotation")) {
+                JsonObject rotationObject =
+                        object.getAsJsonObject("rotation");
+
+                rotation = readVector(rotationObject, "angle",
+                        "axis");
+
+                if (rotationObject.has("origin")) {
+                    origin = readArray(
+                            rotationObject.getAsJsonArray("origin")
+                    );
+                }
+            }
+
+            List<Face> faces = readFaces(object);
+
+            elements.add(new Element(
+                    from,
+                    to,
+                    rotation,
+                    origin,
+                    Collections.unmodifiableList(faces)
+            ));
+        }
+
+        return elements;
     }
-}
 
-tasks.jar {
-    archiveFileName = "VortexConverter-${project.version}.jar"
+    private List<Face> readFaces(JsonObject object) {
+        List<Face> faces = new ArrayList<>();
 
-    manifest {
-        attributes(
-            'Implementation-Title': 'VortexConverter',
-            'Implementation-Version': project.version,
-            'Built-By': 'VortexTeam'
-        )
+        if (!object.has("faces")
+                || !object.get("faces").isJsonObject()) {
+            return faces;
+        }
+
+        JsonObject faceObject = object.getAsJsonObject("faces");
+
+        for (Map.Entry<String, JsonElement> entry
+                : faceObject.entrySet()) {
+
+            JsonObject face = entry.getValue().getAsJsonObject();
+
+            String texture = getString(face, "texture");
+            int rotation = face.has("rotation")
+                    ? face.get("rotation").getAsInt() : 0;
+
+            double[] uv = null;
+
+            if (face.has("uv") && face.get("uv").isJsonArray()) {
+                JsonArray uvArray = face.getAsJsonArray("uv");
+
+                if (uvArray.size() == 4) {
+                    uv = new double[4];
+
+                    for (int i = 0; i < 4; i++) {
+                        uv[i] = uvArray.get(i).getAsDouble();
+                    }
+                }
+            }
+
+            faces.add(new Face(
+                    entry.getKey(),
+                    texture,
+                    rotation,
+                    uv
+            ));
+        }
+
+        return faces;
+    }
+
+    private Vector3 readVector(
+            JsonObject object,
+            String key
+    ) {
+        if (!object.has(key)
+                || !object.get(key).isJsonArray()) {
+            return null;
+        }
+
+        return readArray(object.getAsJsonArray(key));
+    }
+
+    private Vector3 readVector(
+            JsonObject object,
+            String angleKey,
+            String axisKey
+    ) {
+        if (!object.has(angleKey)) {
+            return new Vector3(0, 0, 0);
+        }
+
+        double angle = object.get(angleKey).getAsDouble();
+
+        String axis = getString(object, axisKey);
+
+        return switch (axis) {
+            case "x" -> new Vector3(angle, 0, 0);
+            case "y" -> new Vector3(0, angle, 0);
+            case "z" -> new Vector3(0, 0, angle);
+            default -> new Vector3(0, 0, 0);
+        };
+    }
+
+    private Vector3 readArray(JsonArray array) {
+        if (array.size() != 3) {
+            return new Vector3(0, 0, 0);
+        }
+
+        return new Vector3(
+                array.get(0).getAsDouble(),
+                array.get(1).getAsDouble(),
+                array.get(2).getAsDouble()
+        );
+    }
+
+    private String getString(JsonObject object, String key) {
+        if (!object.has(key)
+                || !object.get(key).isJsonPrimitive()) {
+            return null;
+        }
+
+        return object.get(key).getAsString();
     }
 }
