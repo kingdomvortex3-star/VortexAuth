@@ -1,0 +1,21 @@
+
+name: VortexConverter
+version: '${version}'
+main: id.vortexconverter.VortexConverter
+api-version: '26.3'
+author: VortexTeam
+description: Java to Bedrock Resource Pack and Mapping Converter
+website: https://github.com/kingdomvortex3-star
+
+commands:
+  vortexconvert:
+    description: Main VortexConverter command
+    usage: /vortexconvert <help|scan|convert|report|reload>
+    aliases:
+      - v2b
+      - vortexc
+
+permissions:
+  vortexconverter.admin:
+    description: Access to all VortexConverter commands
+    default: op
