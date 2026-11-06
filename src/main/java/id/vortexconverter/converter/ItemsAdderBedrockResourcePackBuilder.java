@@ -10,13 +10,13 @@ import id.vortexconverter.mappings.ItemsAdderCustomMappingGenerator;
 import id.vortexconverter.scanner.ItemsAdderConfigParser;
 
 import java.io.File;
-import java.io.FileInputStream;
-import java.io.FileOutputStream;
 import java.io.IOException;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -31,40 +31,34 @@ public class ItemsAdderBedrockResourcePackBuilder {
 
     public PackResult build(
             File itemsAdderContents,
-            File outputDirectory,
+            File geyserDataDirectory,
             ItemsAdderConfigParser.ParseResult parseResult,
             ItemsAdderCustomMappingGenerator.MappingResult mappingResult
     ) throws IOException {
 
         if (itemsAdderContents == null
                 || !itemsAdderContents.isDirectory()) {
-            throw new IOException(
-                    "Folder ItemsAdder contents tidak ditemukan."
-            );
+            throw new IOException("ItemsAdder contents tidak ditemukan.");
         }
 
-        if (outputDirectory == null) {
-            throw new IOException(
-                    "Folder output tidak ditentukan."
-            );
+        if (geyserDataDirectory == null) {
+            throw new IOException("Folder data Geyser tidak ditemukan.");
         }
 
-        if (parseResult == null || mappingResult == null) {
-            throw new IOException(
-                    "Data parser atau mapping tidak tersedia."
-            );
+        if (parseResult == null || mappingResult == null
+                || mappingResult.mapping() == null) {
+            throw new IOException("Data parser atau mapping tidak tersedia.");
         }
 
-        if (!outputDirectory.exists()
-                && !outputDirectory.mkdirs()) {
-            throw new IOException(
-                    "Tidak dapat membuat folder output."
-            );
+        File packsDirectory = new File(geyserDataDirectory, "packs");
+
+        if (!packsDirectory.exists() && !packsDirectory.mkdirs()) {
+            throw new IOException("Tidak dapat membuat folder Geyser packs.");
         }
 
         File workingDirectory = new File(
-                outputDirectory,
-                "VortexConverter-Bedrock-Pack"
+                geyserDataDirectory,
+                ".vortexconverter-bedrock-work"
         );
 
         if (workingDirectory.exists()) {
@@ -78,9 +72,7 @@ public class ItemsAdderBedrockResourcePackBuilder {
 
         if (!texturesDirectory.mkdirs()
                 && !texturesDirectory.isDirectory()) {
-            throw new IOException(
-                    "Tidak dapat membuat folder textures/items."
-            );
+            throw new IOException("Tidak dapat membuat folder tekstur.");
         }
 
         List<String> warnings = new ArrayList<>();
@@ -90,6 +82,9 @@ public class ItemsAdderBedrockResourcePackBuilder {
                 indexTextures(itemsAdderContents);
 
         JsonObject textureData = new JsonObject();
+
+        JsonObject items = mappingResult.mapping()
+                .getAsJsonObject("items");
 
         int discoveredItems = 0;
         int copiedTextures = 0;
@@ -106,26 +101,17 @@ public class ItemsAdderBedrockResourcePackBuilder {
 
             String javaIdentifier = asset.getJavaIdentifier();
 
-            if (javaIdentifier == null
-                    || !mappingResult.mapping()
-                    .getAsJsonObject("items")
-                    .has(javaIdentifier)) {
-                skipped.add(
-                        asset.getNamespacedId()
-                                + ": mapping tidak ditemukan."
-                );
+            if (javaIdentifier == null || !items.has(javaIdentifier)) {
+                skipped.add(asset.getNamespacedId()
+                        + ": mapping tidak ditemukan.");
                 continue;
             }
 
-            JsonArray definitions = mappingResult.mapping()
-                    .getAsJsonObject("items")
-                    .getAsJsonArray(javaIdentifier);
+            JsonArray definitions = items.getAsJsonArray(javaIdentifier);
 
             if (definitions == null || definitions.isEmpty()) {
-                skipped.add(
-                        asset.getNamespacedId()
-                                + ": definisi mapping kosong."
-                );
+                skipped.add(asset.getNamespacedId()
+                        + ": definisi mapping kosong.");
                 continue;
             }
 
@@ -135,14 +121,11 @@ public class ItemsAdderBedrockResourcePackBuilder {
                     definition.get("bedrock_identifier").getAsString();
 
             String atlasKey = toAtlasKey(bedrockIdentifier);
-
             String texturePath = asset.getTexturePath();
 
             if (texturePath == null || texturePath.isBlank()) {
-                skipped.add(
-                        asset.getNamespacedId()
-                                + ": texture path tidak ditemukan."
-                );
+                skipped.add(asset.getNamespacedId()
+                        + ": texture path tidak ditemukan.");
                 continue;
             }
 
@@ -152,19 +135,15 @@ public class ItemsAdderBedrockResourcePackBuilder {
             );
 
             if (sourceTexture == null) {
-                skipped.add(
-                        asset.getNamespacedId()
-                                + ": file tekstur tidak ditemukan: "
-                                + texturePath
-                );
+                skipped.add(asset.getNamespacedId()
+                        + ": tekstur tidak ditemukan atau ambigu: "
+                        + texturePath);
                 continue;
             }
 
-            String outputTextureName = atlasKey + ".png";
-
             File destination = new File(
                     texturesDirectory,
-                    outputTextureName
+                    atlasKey + ".png"
             );
 
             Files.copy(
@@ -174,23 +153,21 @@ public class ItemsAdderBedrockResourcePackBuilder {
             );
 
             JsonObject textureEntry = new JsonObject();
-            JsonArray texturePaths = new JsonArray();
 
-            texturePaths.add(
+            // Geyser/Bedrock item_texture.json menggunakan string path.
+            textureEntry.addProperty(
+                    "textures",
                     "textures/items/" + atlasKey
             );
 
-            textureEntry.add("textures", texturePaths);
-
-            textureData.add(atlasKey, textureEntry);
-
+            textureData.add(bedrockIdentifier, textureEntry);
             copiedTextures++;
         }
 
         if (copiedTextures == 0) {
             throw new IOException(
-                    "Tidak ada tekstur yang berhasil ditemukan. "
-                            + "Periksa texture path ItemsAdder."
+                    "Tidak ada tekstur item yang berhasil dikonversi. "
+                            + "Periksa konfigurasi texture ItemsAdder."
             );
         }
 
@@ -209,21 +186,24 @@ public class ItemsAdderBedrockResourcePackBuilder {
         );
 
         writeJson(
-                new File(
-                        workingDirectory,
-                        "textures/item_texture.json"
-                ),
+                new File(workingDirectory, "textures/item_texture.json"),
                 textureAtlas
         );
 
         writeManifest(workingDirectory);
 
         File packFile = new File(
-                outputDirectory,
+                packsDirectory,
                 "VortexConverter-Bedrock.mcpack"
         );
 
         createArchive(workingDirectory, packFile);
+
+        warnings.add(
+                "Pack saat ini berisi tekstur item dan metadata dasar. "
+                        + "Model 3D, block, furniture, dan animasi "
+                        + "belum dikonversi oleh builder ini."
+        );
 
         return new PackResult(
                 true,
@@ -248,9 +228,8 @@ public class ItemsAdderBedrockResourcePackBuilder {
                             .toLowerCase()
                             .endsWith(".png"))
                     .forEach(path -> {
-                        File file = path.toFile();
-
-                        String filename = file.getName()
+                        String filename = path.getFileName()
+                                .toString()
                                 .toLowerCase();
 
                         String key = filename.substring(
@@ -261,7 +240,7 @@ public class ItemsAdderBedrockResourcePackBuilder {
                         index.computeIfAbsent(
                                 key,
                                 ignored -> new ArrayList<>()
-                        ).add(file);
+                        ).add(path.toFile());
                     });
         }
 
@@ -317,14 +296,9 @@ public class ItemsAdderBedrockResourcePackBuilder {
             throws IOException {
 
         JsonObject manifest = new JsonObject();
-
-        manifest.addProperty(
-                "format_version",
-                2
-        );
+        manifest.addProperty("format_version", 2);
 
         JsonObject header = new JsonObject();
-
         header.addProperty(
                 "name",
                 "VortexConverter Bedrock Resource Pack"
@@ -337,29 +311,22 @@ public class ItemsAdderBedrockResourcePackBuilder {
                 "uuid",
                 UUID.nameUUIDFromBytes(
                         "VortexConverter-Bedrock-Header"
-                                .getBytes(java.nio.charset.StandardCharsets.UTF_8)
+                                .getBytes(StandardCharsets.UTF_8)
                 ).toString()
         );
-        header.addProperty("version", "1.0.0");
-        header.add(
-                "min_engine_version",
-                versionArray(1, 20, 0)
-        );
+        header.add("version", versionArray(1, 0, 0));
+        header.add("min_engine_version", versionArray(1, 20, 0));
 
         JsonObject module = new JsonObject();
-
-        module.addProperty(
-                "type",
-                "resources"
-        );
+        module.addProperty("type", "resources");
         module.addProperty(
                 "uuid",
                 UUID.nameUUIDFromBytes(
                         "VortexConverter-Bedrock-Module"
-                                .getBytes(java.nio.charset.StandardCharsets.UTF_8)
+                                .getBytes(StandardCharsets.UTF_8)
                 ).toString()
         );
-        module.addProperty("version", "1.0.0");
+        module.add("version", versionArray(1, 0, 0));
 
         JsonArray modules = new JsonArray();
         modules.add(module);
@@ -375,11 +342,9 @@ public class ItemsAdderBedrockResourcePackBuilder {
 
     private JsonArray versionArray(int major, int minor, int patch) {
         JsonArray array = new JsonArray();
-
         array.add(major);
         array.add(minor);
         array.add(patch);
-
         return array;
     }
 
@@ -388,8 +353,7 @@ public class ItemsAdderBedrockResourcePackBuilder {
 
         File parent = file.getParentFile();
 
-        if (parent != null && !parent.exists()
-                && !parent.mkdirs()) {
+        if (parent != null && !parent.exists() && !parent.mkdirs()) {
             throw new IOException(
                     "Tidak dapat membuat folder: " + parent
             );
@@ -398,44 +362,30 @@ public class ItemsAdderBedrockResourcePackBuilder {
         Files.writeString(
                 file.toPath(),
                 GSON.toJson(json),
-                java.nio.charset.StandardCharsets.UTF_8
+                StandardCharsets.UTF_8
         );
     }
 
     private void createArchive(File source, File destination)
             throws IOException {
 
-        try (FileOutputStream fileOutput =
-                     new FileOutputStream(destination);
-             ZipOutputStream zip =
-                     new ZipOutputStream(fileOutput)) {
+        try (ZipOutputStream zip = new ZipOutputStream(
+                Files.newOutputStream(destination.toPath()))) {
 
-            Path root = source.toPath();
+            try (var stream = Files.walk(source.toPath())) {
+                for (Path path : stream
+                        .filter(Files::isRegularFile)
+                        .toList()) {
 
-            try (var stream = Files.walk(root)) {
-                stream.filter(Files::isRegularFile)
-                        .forEach(path -> {
-                            String entryName = root.relativize(path)
-                                    .toString()
-                                    .replace('\\', '/');
+                    String entryName = source.toPath()
+                            .relativize(path)
+                            .toString()
+                            .replace('\\', '/');
 
-                            try {
-                                zip.putNextEntry(
-                                        new ZipEntry(entryName)
-                                );
-
-                                try (FileInputStream input =
-                                             new FileInputStream(path.toFile())) {
-                                    input.transferTo(zip);
-                                }
-
-                                zip.closeEntry();
-                            } catch (IOException exception) {
-                                throw new ArchiveException(exception);
-                            }
-                        });
-            } catch (ArchiveException exception) {
-                throw exception.getCause();
+                    zip.putNextEntry(new ZipEntry(entryName));
+                    Files.copy(path, zip);
+                    zip.closeEntry();
+                }
             }
         }
     }
@@ -448,9 +398,9 @@ public class ItemsAdderBedrockResourcePackBuilder {
         }
 
         try (var stream = Files.walk(directory)) {
-            for (Path path : stream.sorted(
-                    java.util.Comparator.reverseOrder()
-            ).toList()) {
+            for (Path path : stream
+                    .sorted(Comparator.reverseOrder())
+                    .toList()) {
                 Files.deleteIfExists(path);
             }
         }
@@ -470,19 +420,6 @@ public class ItemsAdderBedrockResourcePackBuilder {
             return successful
                     && packFile != null
                     && packFile.isFile();
-        }
-    }
-
-    private static class ArchiveException
-            extends RuntimeException {
-
-        ArchiveException(IOException cause) {
-            super(cause);
-        }
-
-        @Override
-        public synchronized IOException getCause() {
-            return (IOException) super.getCause();
         }
     }
 }
