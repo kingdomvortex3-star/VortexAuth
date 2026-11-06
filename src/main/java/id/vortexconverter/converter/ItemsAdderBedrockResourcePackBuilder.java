@@ -202,6 +202,12 @@ public class ItemsAdderBedrockResourcePackBuilder {
 
             String atlasKey = toAtlasKey(bedrockIdentifier);
 
+            if (textureData.has(atlasKey)) {
+                skipped.add(asset.getNamespacedId()
+                        + ": key tekstur atlas duplikat: " + atlasKey);
+                continue;
+            }
+
             File destination = new File(
                     texturesDirectory,
                     atlasKey + ".png"
@@ -214,12 +220,13 @@ public class ItemsAdderBedrockResourcePackBuilder {
             );
 
             JsonObject textureEntry = new JsonObject();
-            textureEntry.addProperty(
-                    "textures",
-                    "textures/items/" + atlasKey
-            );
+            JsonArray texturePaths = new JsonArray();
+            texturePaths.add("textures/items/" + atlasKey);
 
-            textureData.add(bedrockIdentifier, textureEntry);
+            textureEntry.add("textures", texturePaths);
+
+            // Geyser mencari icon shorthand, bukan identifier mentah.
+            textureData.add(atlasKey, textureEntry);
 
             generatedIdentifiers.put(
                     bedrockIdentifier,
@@ -302,20 +309,14 @@ public class ItemsAdderBedrockResourcePackBuilder {
         );
 
         warnings.add(
-                "Mapping dipilih berdasarkan Java Identifier dan "
-                        + "Custom Model Data yang cocok."
+                "Key tekstur atlas menggunakan format icon shorthand "
+                        + "yang sesuai dengan aturan identifier Geyser."
         );
 
         warnings.add(
                 "Builder saat ini mengemas tekstur item yang memiliki "
                         + "mapping. Model 3D, block, furniture, entity, "
                         + "animasi, dan suara belum dikonversi."
-        );
-
-        warnings.add(
-                "Definisi custom item Bedrock belum dibuat oleh builder ini. "
-                        + "Kesesuaian item Bedrock dan Geyser mapping "
-                        + "masih perlu diselesaikan."
         );
 
         return new PackResult(
