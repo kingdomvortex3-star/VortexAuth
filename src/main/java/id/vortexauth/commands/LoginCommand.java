@@ -4,14 +4,11 @@ package id.vortexauth.commands;
 import id.vortexauth.VortexAuth;
 import id.vortexauth.auth.AuthResult;
 import id.vortexauth.auth.AuthenticationManager;
-
 import org.bukkit.ChatColor;
 import org.bukkit.command.Command;
 import org.bukkit.command.CommandExecutor;
 import org.bukkit.command.CommandSender;
 import org.bukkit.entity.Player;
-
-import java.net.InetSocketAddress;
 
 public final class LoginCommand implements CommandExecutor {
 
@@ -39,7 +36,8 @@ public final class LoginCommand implements CommandExecutor {
         }
 
         if (!plugin.getConfig().getBoolean(
-                "authentication.login.enabled", true
+                "authentication.login.enabled",
+                true
         )) {
             sendRaw(player, "&cLogin is currently disabled.");
             return true;
@@ -67,19 +65,7 @@ public final class LoginCommand implements CommandExecutor {
         if (authenticationManager.isLocked(
                 player.getUniqueId()
         )) {
-            long remaining =
-                    authenticationManager.getRemainingLockTime(
-                            player.getUniqueId()
-                    );
-
-            long seconds = (remaining + 999) / 1000;
-
-            sendRaw(
-                    player,
-                    "&cAccount locked! Try again in &e"
-                            + seconds + " &cseconds."
-            );
-
+            send(player, "messages.too-many-attempts");
             return true;
         }
 
@@ -88,7 +74,9 @@ public final class LoginCommand implements CommandExecutor {
             return true;
         }
 
-        String ipHash = getIpHash(player);
+        String ipHash = plugin.getIpAddressManager() == null
+                ? null
+                : plugin.getIpAddressManager().getPlayerIpHash(player);
 
         AuthResult result = authenticationManager.login(
                 player.getUniqueId(),
@@ -101,57 +89,20 @@ public final class LoginCommand implements CommandExecutor {
         return true;
     }
 
-    private String getIpHash(Player player) {
-        InetSocketAddress address = player.getAddress();
-
-        if (address == null || address.getAddress() == null) {
-            return null;
-        }
-
-        /*
-         * IP hashing will be connected to the
-         * persistent secret manager later.
-         *
-         * Never store raw IP addresses in sessions.
-         */
-        return null;
-    }
-
     private void handleResult(Player player, AuthResult result) {
         switch (result) {
             case SUCCESS -> {
                 send(player, "messages.login-success");
-
                 sendRaw(
                         player,
                         "&7Your authentication session is now active."
                 );
             }
 
-            case INVALID_PASSWORD -> {
-                send(player, "messages.invalid-password");
+            case INVALID_PASSWORD ->
+                    send(player, "messages.invalid-password");
 
-                int remaining =
-                        authenticationManager.getRemainingAttempts(
-                                player.getUniqueId()
-                        );
-
-                sendRaw(
-                        player,
-                        "&7Remaining attempts: &e" + remaining
-                );
-            }
-
-            case TOO_MANY_ATTEMPTS -> {
-                send(player, "messages.too-many-attempts");
-
-                sendRaw(
-                        player,
-                        "&cYour account has been temporarily locked."
-                );
-            }
-
-            case ACCOUNT_LOCKED ->
+            case TOO_MANY_ATTEMPTS, ACCOUNT_LOCKED ->
                     send(player, "messages.too-many-attempts");
 
             case NOT_REGISTERED ->
