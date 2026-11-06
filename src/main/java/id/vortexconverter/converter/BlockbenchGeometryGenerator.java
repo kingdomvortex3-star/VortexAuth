@@ -4,7 +4,6 @@ package id.vortexconverter.converter;
 import com.google.gson.JsonArray;
 import com.google.gson.JsonObject;
 
-import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -16,6 +15,22 @@ public final class BlockbenchGeometryGenerator {
             String identifier,
             int textureWidth,
             int textureHeight
+    ) {
+        return generate(
+                model,
+                identifier,
+                textureWidth,
+                textureHeight,
+                Map.of()
+        );
+    }
+
+    public JsonObject generate(
+            BlockbenchModelReader.BlockbenchModel model,
+            String identifier,
+            int textureWidth,
+            int textureHeight,
+            Map<String, BlockbenchTextureMapper.CubeUV> uvMappings
     ) {
         if (model == null) {
             throw new IllegalArgumentException(
@@ -37,6 +52,10 @@ public final class BlockbenchGeometryGenerator {
 
         if (textureWidth <= 0) textureWidth = 64;
         if (textureHeight <= 0) textureHeight = 64;
+
+        if (uvMappings == null) {
+            uvMappings = Map.of();
+        }
 
         Map<String, String> boneNames = new HashMap<>();
         collectBoneNames(model.bones(), boneNames);
@@ -60,7 +79,12 @@ public final class BlockbenchGeometryGenerator {
 
         if (model.bones() != null) {
             for (BlockbenchModelReader.Bone bone : model.bones()) {
-                addBoneRecursive(bones, bone, boneNames);
+                addBoneRecursive(
+                        bones,
+                        bone,
+                        boneNames,
+                        uvMappings
+                );
             }
         }
 
@@ -101,7 +125,8 @@ public final class BlockbenchGeometryGenerator {
     private void addBoneRecursive(
             JsonArray output,
             BlockbenchModelReader.Bone bone,
-            Map<String, String> boneNames
+            Map<String, String> boneNames,
+            Map<String, BlockbenchTextureMapper.CubeUV> uvMappings
     ) {
         if (bone == null) {
             return;
@@ -132,7 +157,10 @@ public final class BlockbenchGeometryGenerator {
 
         if (bone.cubes() != null) {
             for (BlockbenchModelReader.Cube cube : bone.cubes()) {
-                JsonObject cubeJson = createCube(cube);
+                JsonObject cubeJson = createCube(
+                        cube,
+                        uvMappings
+                );
 
                 if (cubeJson != null) {
                     cubes.add(cubeJson);
@@ -148,13 +176,19 @@ public final class BlockbenchGeometryGenerator {
 
         if (bone.children() != null) {
             for (BlockbenchModelReader.Bone child : bone.children()) {
-                addBoneRecursive(output, child, boneNames);
+                addBoneRecursive(
+                        output,
+                        child,
+                        boneNames,
+                        uvMappings
+                );
             }
         }
     }
 
     private JsonObject createCube(
-            BlockbenchModelReader.Cube cube
+            BlockbenchModelReader.Cube cube,
+            Map<String, BlockbenchTextureMapper.CubeUV> uvMappings
     ) {
         if (cube == null || cube.from() == null || cube.to() == null) {
             return null;
@@ -192,6 +226,22 @@ public final class BlockbenchGeometryGenerator {
 
         if (cube.rotation() != null) {
             result.add("rotation", vector(cube.rotation()));
+        }
+
+        if (cube.uuid() != null && !cube.uuid().isBlank()) {
+            BlockbenchTextureMapper.CubeUV cubeUV =
+                    uvMappings.get(cube.uuid());
+
+            if (cubeUV != null) {
+                BlockbenchTextureMapper mapper =
+                        new BlockbenchTextureMapper();
+
+                JsonObject uv = mapper.toBedrockUV(cubeUV);
+
+                if (!uv.isEmpty()) {
+                    result.add("uv", uv);
+                }
+            }
         }
 
         return result;
