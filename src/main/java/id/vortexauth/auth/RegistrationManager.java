@@ -42,8 +42,8 @@ public final class RegistrationManager {
 
         if (uuid == null
                 || username == null
-                || platform == null
-                || password == null) {
+                || password == null
+                || platform == null) {
             return AuthResult.INTERNAL_ERROR;
         }
 
@@ -61,25 +61,13 @@ public final class RegistrationManager {
 
         if (normalizedPlatform.equals("JAVA")
                 && !plugin.getConfig().getBoolean(
-                "java.enabled", true)) {
+                "java.enabled", true
+        )) {
             return AuthResult.INTERNAL_ERROR;
         }
 
         if (normalizedPlatform.equals("BEDROCK")) {
-            if (!plugin.getConfig().getBoolean(
-                    "bedrock.enabled", true)) {
-                return AuthResult.BEDROCK_NOT_SUPPORTED;
-            }
-
-            if (xuid == null
-                    || !SecurityUtils.isValidXuid(xuid)) {
-                return AuthResult.INVALID_XUID;
-            }
-
-            if (plugin.getConfig().getBoolean(
-                    "bedrock.auto-login.enabled", true)) {
-                return AuthResult.BEDROCK_NOT_SUPPORTED;
-            }
+            return AuthResult.BEDROCK_NOT_SUPPORTED;
         }
 
         if (!passwordManager.isValidPassword(password)) {
@@ -88,17 +76,29 @@ public final class RegistrationManager {
                     6
             );
 
+            int maximum = plugin.getConfig().getInt(
+                    "authentication.register.max-password-length",
+                    32
+            );
+
             if (password.length() < minimum) {
                 return AuthResult.PASSWORD_TOO_SHORT;
             }
 
-            return AuthResult.PASSWORD_TOO_LONG;
+            if (password.length() > maximum
+                    || password.getBytes(
+                    java.nio.charset.StandardCharsets.UTF_8
+            ).length > 72) {
+                return AuthResult.PASSWORD_TOO_LONG;
+            }
+
+            return AuthResult.INVALID_PASSWORD;
         }
 
         if (plugin.getConfig().getBoolean(
                 "authentication.register.require-confirmation",
-                true)) {
-
+                true
+        )) {
             if (!passwordManager.passwordsMatch(
                     password,
                     confirmation
@@ -118,21 +118,12 @@ public final class RegistrationManager {
                 return AuthResult.ALREADY_REGISTERED;
             }
 
-            if (normalizedPlatform.equals("BEDROCK")
-                    && accountManager.getAccountByXuid(
-                    xuid
-            ).isPresent()) {
-                return AuthResult.ALREADY_REGISTERED;
-            }
-
             boolean registered = accountManager.register(
                     uuid,
                     username,
                     password,
-                    normalizedPlatform,
-                    normalizedPlatform.equals("BEDROCK")
-                            ? xuid
-                            : null
+                    "JAVA",
+                    null
             );
 
             return registered
@@ -146,6 +137,7 @@ public final class RegistrationManager {
             );
 
             return AuthResult.DATABASE_ERROR;
+
         } catch (IllegalArgumentException exception) {
             return AuthResult.INVALID_PASSWORD;
         }
