@@ -4,6 +4,7 @@ package id.vortexconverter.converter;
 import com.google.gson.Gson;
 import com.google.gson.GsonBuilder;
 import com.google.gson.JsonArray;
+import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 
 import id.vortexconverter.mappings.ItemsAdderCustomMappingGenerator;
@@ -12,6 +13,7 @@ import id.vortexconverter.scanner.ItemsAdderConfigParser;
 
 import java.io.File;
 import java.io.IOException;
+import java.math.BigDecimal;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -56,7 +58,6 @@ public class ItemsAdderBedrockResourcePackBuilder {
         }
 
         File packsDirectory = new File(geyserDataDirectory, "packs");
-
         Files.createDirectories(packsDirectory.toPath());
 
         if (!packsDirectory.isDirectory()) {
@@ -134,8 +135,27 @@ public class ItemsAdderBedrockResourcePackBuilder {
                 continue;
             }
 
-            JsonObject definition =
-                    definitions.get(0).getAsJsonObject();
+            Object assetCmdValue = asset.getCustomModelDataValue();
+
+            if (assetCmdValue == null) {
+                skipped.add(asset.getNamespacedId()
+                        + ": Custom Model Data tidak ditemukan.");
+                continue;
+            }
+
+            JsonObject definition = findMatchingDefinition(
+                    definitions,
+                    assetCmdValue
+            );
+
+            if (definition == null) {
+                skipped.add(asset.getNamespacedId()
+                        + ": mapping dengan CMD "
+                        + assetCmdValue
+                        + " tidak ditemukan untuk "
+                        + javaIdentifier + ".");
+                continue;
+            }
 
             if (!definition.has("bedrock_identifier")
                     || definition.get("bedrock_identifier").isJsonNull()) {
@@ -212,10 +232,10 @@ public class ItemsAdderBedrockResourcePackBuilder {
         if (copiedTextures == 0) {
             throw new IOException(
                     "Tidak ada tekstur item yang berhasil dikonversi. "
-                            + "Resolver menemukan "
+                            + "Resolver memindai "
                             + resolution.getScannedFiles()
                             + " file, tetapi tidak menemukan tekstur PNG "
-                            + "yang cocok dengan item bermapping."
+                            + "yang cocok dengan item dan mapping CMD."
             );
         }
 
@@ -282,16 +302,20 @@ public class ItemsAdderBedrockResourcePackBuilder {
         );
 
         warnings.add(
+                "Mapping dipilih berdasarkan Java Identifier dan "
+                        + "Custom Model Data yang cocok."
+        );
+
+        warnings.add(
                 "Builder saat ini mengemas tekstur item yang memiliki "
                         + "mapping. Model 3D, block, furniture, entity, "
                         + "animasi, dan suara belum dikonversi."
         );
 
         warnings.add(
-                "Format item_texture.json saja belum membuktikan bahwa "
-                        + "custom item Bedrock dan Geyser mapping sudah "
-                        + "berfungsi. Kesesuaian definisi item Bedrock "
-                        + "perlu diverifikasi."
+                "Definisi custom item Bedrock belum dibuat oleh builder ini. "
+                        + "Kesesuaian item Bedrock dan Geyser mapping "
+                        + "masih perlu diselesaikan."
         );
 
         return new PackResult(
@@ -304,6 +328,72 @@ public class ItemsAdderBedrockResourcePackBuilder {
                 workingDirectory,
                 packFile
         );
+    }
+
+    private JsonObject findMatchingDefinition(
+            JsonArray definitions,
+            Object assetCmdValue
+    ) {
+        BigDecimal assetCmd = toBigDecimal(assetCmdValue);
+
+        if (assetCmd == null) {
+            return null;
+        }
+
+        for (JsonElement element : definitions) {
+            if (!element.isJsonObject()) {
+                continue;
+            }
+
+            JsonObject definition = element.getAsJsonObject();
+
+            if (!definition.has("custom_model_data")
+                    || definition.get("custom_model_data").isJsonNull()) {
+                continue;
+            }
+
+            if (definition.has("type")
+                    && !definition.get("type").getAsString()
+                    .equalsIgnoreCase("legacy")) {
+                continue;
+            }
+
+            BigDecimal mappingCmd = toBigDecimal(
+                    definition.get("custom_model_data")
+            );
+
+            if (mappingCmd != null
+                    && mappingCmd.compareTo(assetCmd) == 0) {
+                return definition;
+            }
+        }
+
+        return null;
+    }
+
+    private BigDecimal toBigDecimal(Object value) {
+        if (value == null) {
+            return null;
+        }
+
+        try {
+            return new BigDecimal(value.toString());
+        } catch (NumberFormatException exception) {
+            return null;
+        }
+    }
+
+    private BigDecimal toBigDecimal(JsonElement value) {
+        if (value == null || value.isJsonNull()
+                || !value.isJsonPrimitive()) {
+            return null;
+        }
+
+        try {
+            return new BigDecimal(value.getAsString());
+        } catch (NumberFormatException exception) {
+            return null;
+        }
     }
 
     private ItemsAdderAssetResolver.ResolvedAsset findResolvedAsset(
