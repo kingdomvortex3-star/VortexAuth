@@ -2,7 +2,6 @@
 package id.vortexauth.auth;
 
 import id.vortexauth.VortexAuth;
-import id.vortexauth.session.SessionManager;
 
 import java.sql.SQLException;
 import java.util.UUID;
@@ -12,20 +11,20 @@ public final class AuthenticationManager {
     private final VortexAuth plugin;
     private final AccountManager accountManager;
     private final RegistrationManager registrationManager;
-    private final LoginAttemptManager attemptManager;
+    private final LoginAttemptManager loginAttemptManager;
     private final SessionManager sessionManager;
 
     public AuthenticationManager(
             VortexAuth plugin,
             AccountManager accountManager,
             RegistrationManager registrationManager,
-            LoginAttemptManager attemptManager,
+            LoginAttemptManager loginAttemptManager,
             SessionManager sessionManager
     ) {
         this.plugin = plugin;
         this.accountManager = accountManager;
         this.registrationManager = registrationManager;
-        this.attemptManager = attemptManager;
+        this.loginAttemptManager = loginAttemptManager;
         this.sessionManager = sessionManager;
     }
 
@@ -37,6 +36,18 @@ public final class AuthenticationManager {
             String platform,
             String xuid
     ) {
+        if (uuid == null) {
+            return AuthResult.INTERNAL_ERROR;
+        }
+
+        if (isAuthenticated(uuid)) {
+            return AuthResult.ALREADY_LOGGED_IN;
+        }
+
+        if (!plugin.getConfig().getBoolean("authentication.enabled", true)) {
+            return AuthResult.INTERNAL_ERROR;
+        }
+
         return registrationManager.register(
                 uuid,
                 username,
@@ -47,20 +58,16 @@ public final class AuthenticationManager {
         );
     }
 
-    public AuthResult login(
-            UUID uuid,
-            String password,
-            String ipHash
-    ) {
+    public AuthResult login(UUID uuid, String password) {
+        return login(uuid, password, null);
+    }
+
+    public AuthResult login(UUID uuid, String password, String ipHash) {
         if (uuid == null || password == null) {
             return AuthResult.INTERNAL_ERROR;
         }
 
-        if (!plugin.getConfig().getBoolean(
-                "authentication.enabled", true
-        ) || !plugin.getConfig().getBoolean(
-                "authentication.login.enabled", true
-        )) {
+        if (!plugin.getConfig().getBoolean("authentication.enabled", true)) {
             return AuthResult.INTERNAL_ERROR;
         }
 
@@ -68,45 +75,44 @@ public final class AuthenticationManager {
             return AuthResult.ALREADY_LOGGED_IN;
         }
 
-        if (attemptManager.isLocked(uuid)) {
+        if (loginAttemptManager.isLocked(uuid)) {
             return AuthResult.ACCOUNT_LOCKED;
         }
 
         try {
-            if (!accountManager.exists(uuid)) {
+            AccountManager.Account account = accountManager.getAccount(uuid);
+
+            if (account == null) {
                 return AuthResult.NOT_REGISTERED;
             }
 
-            boolean successful = accountManager.login(
-                    uuid,
-                    password
-            );
+            boolean valid = accountManager.login(uuid, password);
 
-            if (!successful) {
-                boolean locked =
-                        attemptManager.recordFailedAttempt(uuid);
+            if (!valid) {
+                loginAttemptManager.recordFailedAttempt(uuid);
 
-                return locked
-                        ? AuthResult.TOO_MANY_ATTEMPTS
-                        : AuthResult.INVALID_PASSWORD;
+                if (loginAttemptManager.isLocked(uuid)) {
+                    return AuthResult.TOO_MANY_ATTEMPTS;
+                }
+
+                return AuthResult.INVALID_PASSWORD;
             }
 
-            attemptManager.resetAttempts(uuid);
-
+            loginAttemptManager.resetAttempts(uuid);
             sessionManager.createSession(uuid, ipHash);
 
             return AuthResult.SUCCESS;
 
         } catch (SQLException exception) {
             plugin.getLogger().severe(
-                    "Database error during login: "
+                    "Failed to authenticate account " + uuid + ": "
                             + exception.getMessage()
             );
 
             return AuthResult.DATABASE_ERROR;
         } catch (Exception exception) {
             plugin.getLogger().severe(
-                    "Authentication error: "
+                    "Unexpected authentication error: "
                             + exception.getMessage()
             );
 
@@ -114,58 +120,72 @@ public final class AuthenticationManager {
         }
     }
 
-    public AuthResult login(UUID uuid, String password) {
-        return login(uuid, password, null);
-    }
-
     public boolean logout(UUID uuid) {
         if (uuid == null) {
             return false;
         }
 
-        boolean authenticated =
-                sessionManager.isAuthenticated(uuid);
-
         sessionManager.invalidateSession(uuid);
-
-        return authenticated;
+        return true;
     }
 
     public boolean isAuthenticated(UUID uuid) {
-        return sessionManager.isAuthenticated(uuid);
+        return uuid != null && sessionManager.isAuthenticated(uuid);
+    }
+
+    public boolean isAuthenticated(UUID uuid, String ipHash) {
+        return uuid != null
+                && sessionManager.isAuthenticated(uuid, ipHash);
     }
 
     public boolean isRegistered(UUID uuid) {
-        if (uuid == null) {
-            return false;
-        }
-
-        try {
-            return accountManager.exists(uuid);
-        } catch (SQLException exception) {
-            plugin.getLogger().severe(
-                    "Unable to check player account: "
-                            + exception.getMessage()
-            );
-
-            return false;
-        }
+        return uuid != null && accountManager.exists(uuid);
     }
 
     public boolean isLocked(UUID uuid) {
-        return attemptManager.isLocked(uuid);
+        return uuid != null && loginAttemptManager.isLocked(uuid);
     }
 
-    public int getRemainingAttempts(UUID uuid) {
-        return attemptManager.getRemainingAttempts(uuid);
-    }
+    public void createBedrockSession(UUID uuid, String ipHash) {
+        if (uuid == null) {
+            return;
+        }
 
-    public long getRemainingLockTime(UUID uuid) {
-        return attemptManager.getRemainingLockMillis(uuid);
+        try {
+            sessionManager.createSession(uuid, ipHash);
+            accountManager.updateLastLogin(uuid);
+            loginAttemptManager.resetAttempts(uuid);
+
+        } catch (SQLException exception) {
+            sessionManager.invalidateSession(uuid);
+
+            plugin.getLogger().severe(
+                    "Failed to create Bedrock session: "
+                            + exception.getMessage()
+            );
+        }
     }
 
     public void invalidateSession(UUID uuid) {
-        sessionManager.invalidateSession(uuid);
+        if (uuid != null) {
+            sessionManager.invalidateSession(uuid);
+        }
+    }
+
+    public void invalidateAllSessions() {
+        sessionManager.invalidateAll();
+    }
+
+    public AccountManager getAccountManager() {
+        return accountManager;
+    }
+
+    public SessionManager getSessionManager() {
+        return sessionManager;
+    }
+
+    public LoginAttemptManager getLoginAttemptManager() {
+        return loginAttemptManager;
     }
 
     public void shutdown() {
