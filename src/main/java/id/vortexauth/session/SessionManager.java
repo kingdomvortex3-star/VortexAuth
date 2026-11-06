@@ -25,6 +25,13 @@ public final class SessionManager {
             return;
         }
 
+        if (plugin.getConfig().getBoolean(
+                "session.ip-check", true
+        ) && (ipHash == null || ipHash.isBlank())) {
+            invalidateSession(uuid);
+            return;
+        }
+
         long now = System.currentTimeMillis();
         long duration = getSessionDuration();
 
@@ -71,10 +78,13 @@ public final class SessionManager {
         }
 
         if (!plugin.getConfig().getBoolean(
-                "session.ip-check",
-                true
+                "session.ip-check", true
         )) {
             return true;
+        }
+
+        if (currentIpHash == null || currentIpHash.isBlank()) {
+            return false;
         }
 
         Session session = sessions.get(uuid);
@@ -85,7 +95,7 @@ public final class SessionManager {
 
         String savedIpHash = session.ipHash();
 
-        if (savedIpHash == null || currentIpHash == null) {
+        if (savedIpHash == null || savedIpHash.isBlank()) {
             return false;
         }
 
@@ -154,8 +164,7 @@ public final class SessionManager {
 
     private boolean isExpired(Session session, long now) {
         if (!plugin.getConfig().getBoolean(
-                "session.timeout.enabled",
-                true
+                "session.timeout.enabled", true
         )) {
             return false;
         }
@@ -165,8 +174,7 @@ public final class SessionManager {
 
     private long getSessionDuration() {
         if (!plugin.getConfig().getBoolean(
-                "session.timeout.enabled",
-                true
+                "session.timeout.enabled", true
         )) {
             return Long.MAX_VALUE;
         }
@@ -174,8 +182,7 @@ public final class SessionManager {
         long minutes = Math.max(
                 1L,
                 plugin.getConfig().getLong(
-                        "session.timeout.duration-minutes",
-                        30L
+                        "session.timeout.duration-minutes", 30L
                 )
         );
 
