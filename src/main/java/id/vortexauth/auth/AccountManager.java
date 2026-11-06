@@ -2,355 +2,222 @@
 package id.vortexauth.auth;
 
 import id.vortexauth.VortexAuth;
-import id.vortexauth.database.DatabaseManager;
+import id.vortexauth.session.SessionManager;
 
-import java.sql.Connection;
-import java.sql.PreparedStatement;
-import java.sql.ResultSet;
 import java.sql.SQLException;
-
 import java.util.Optional;
 import java.util.UUID;
 
-public final class AccountManager {
+public final class AuthenticationManager {
 
     private final VortexAuth plugin;
-    private final DatabaseManager database;
-    private final PasswordManager passwordManager;
+    private final AccountManager accountManager;
+    private final RegistrationManager registrationManager;
+    private final LoginAttemptManager loginAttemptManager;
+    private final SessionManager sessionManager;
 
-    public AccountManager(
+    public AuthenticationManager(
             VortexAuth plugin,
-            DatabaseManager database,
-            PasswordManager passwordManager
+            AccountManager accountManager,
+            RegistrationManager registrationManager,
+            LoginAttemptManager loginAttemptManager,
+            SessionManager sessionManager
     ) {
         this.plugin = plugin;
-        this.database = database;
-        this.passwordManager = passwordManager;
+        this.accountManager = accountManager;
+        this.registrationManager = registrationManager;
+        this.loginAttemptManager = loginAttemptManager;
+        this.sessionManager = sessionManager;
     }
 
-    public boolean register(
+    public AuthResult register(
             UUID uuid,
             String username,
             String password,
+            String confirmation,
             String platform,
             String xuid
-    ) throws SQLException {
-
-        if (uuid == null || username == null || platform == null) {
-            return false;
+    ) {
+        if (uuid == null) {
+            return AuthResult.INTERNAL_ERROR;
         }
 
-        if (!passwordManager.isValidPassword(password)) {
-            return false;
+        if (isAuthenticated(uuid)) {
+            return AuthResult.ALREADY_LOGGED_IN;
         }
 
-        if (getAccount(uuid).isPresent()) {
-            return false;
-        }
-
-        if (getAccountByUsername(username).isPresent()) {
-            return false;
-        }
-
-        if (xuid != null && getAccountByXuid(xuid).isPresent()) {
-            return false;
-        }
-
-        String passwordHash =
-                passwordManager.hashPassword(password);
-
-        String sql = """
-                INSERT INTO vortexauth_accounts
-                (
-                    uuid,
-                    username,
-                    password_hash,
-                    platform,
-                    xuid,
-                    premium_enabled,
-                    premium_verified,
-                    created_at,
-                    last_login
-                )
-                VALUES (?, ?, ?, ?, ?, FALSE, FALSE, ?, 0)
-                """;
-
-        try (Connection connection = database.getConnection();
-             PreparedStatement statement =
-                     connection.prepareStatement(sql)) {
-
-            statement.setString(1, uuid.toString());
-            statement.setString(2, username);
-            statement.setString(3, passwordHash);
-            statement.setString(4, platform.toUpperCase());
-            statement.setString(5, xuid);
-            statement.setLong(6, System.currentTimeMillis());
-
-            return statement.executeUpdate() == 1;
-        }
-    }
-
-    public boolean login(
-            UUID uuid,
-            String password
-    ) throws SQLException {
-
-        Optional<Account> optionalAccount = getAccount(uuid);
-
-        if (optionalAccount.isEmpty()) {
-            return false;
-        }
-
-        Account account = optionalAccount.get();
-
-        if (account.passwordHash() == null) {
-            return false;
-        }
-
-        if (!passwordManager.verifyPassword(
-                password,
-                account.passwordHash()
+        if (!plugin.getConfig().getBoolean(
+                "authentication.enabled", true
         )) {
-            return false;
+            return AuthResult.INTERNAL_ERROR;
         }
 
-        updateLastLogin(uuid);
-
-        return true;
-    }
-
-    public Optional<Account> getAccount(UUID uuid)
-            throws SQLException {
-
-        if (uuid == null) {
-            return Optional.empty();
-        }
-
-        String sql = """
-                SELECT *
-                FROM vortexauth_accounts
-                WHERE uuid = ?
-                LIMIT 1
-                """;
-
-        try (Connection connection = database.getConnection();
-             PreparedStatement statement =
-                     connection.prepareStatement(sql)) {
-
-            statement.setString(1, uuid.toString());
-
-            try (ResultSet result = statement.executeQuery()) {
-                if (result.next()) {
-                    return Optional.of(mapAccount(result));
-                }
-            }
-        }
-
-        return Optional.empty();
-    }
-
-    public Optional<Account> getAccountByUsername(
-            String username
-    ) throws SQLException {
-
-        if (username == null || username.isBlank()) {
-            return Optional.empty();
-        }
-
-        String sql = """
-                SELECT *
-                FROM vortexauth_accounts
-                WHERE username = ?
-                LIMIT 1
-                """;
-
-        try (Connection connection = database.getConnection();
-             PreparedStatement statement =
-                     connection.prepareStatement(sql)) {
-
-            statement.setString(1, username);
-
-            try (ResultSet result = statement.executeQuery()) {
-                if (result.next()) {
-                    return Optional.of(mapAccount(result));
-                }
-            }
-        }
-
-        return Optional.empty();
-    }
-
-    public Optional<Account> getAccountByXuid(
-            String xuid
-    ) throws SQLException {
-
-        if (xuid == null || xuid.isBlank()) {
-            return Optional.empty();
-        }
-
-        String sql = """
-                SELECT *
-                FROM vortexauth_accounts
-                WHERE xuid = ?
-                LIMIT 1
-                """;
-
-        try (Connection connection = database.getConnection();
-             PreparedStatement statement =
-                     connection.prepareStatement(sql)) {
-
-            statement.setString(1, xuid);
-
-            try (ResultSet result = statement.executeQuery()) {
-                if (result.next()) {
-                    return Optional.of(mapAccount(result));
-                }
-            }
-        }
-
-        return Optional.empty();
-    }
-
-    public boolean exists(UUID uuid) throws SQLException {
-        return getAccount(uuid).isPresent();
-    }
-
-    public boolean updateLastLogin(UUID uuid)
-            throws SQLException {
-
-        if (uuid == null) {
-            return false;
-        }
-
-        String sql = """
-                UPDATE vortexauth_accounts
-                SET last_login = ?
-                WHERE uuid = ?
-                """;
-
-        try (Connection connection = database.getConnection();
-             PreparedStatement statement =
-                     connection.prepareStatement(sql)) {
-
-            statement.setLong(1, System.currentTimeMillis());
-            statement.setString(2, uuid.toString());
-
-            return statement.executeUpdate() == 1;
-        }
-    }
-
-    public boolean setPremiumStatus(
-            UUID uuid,
-            boolean enabled,
-            boolean verified
-    ) throws SQLException {
-
-        if (uuid == null) {
-            return false;
-        }
-
-        if (enabled && !verified) {
-            return false;
-        }
-
-        String sql = """
-                UPDATE vortexauth_accounts
-                SET premium_enabled = ?,
-                    premium_verified = ?
-                WHERE uuid = ?
-                """;
-
-        try (Connection connection = database.getConnection();
-             PreparedStatement statement =
-                     connection.prepareStatement(sql)) {
-
-            statement.setBoolean(1, enabled);
-            statement.setBoolean(2, verified);
-            statement.setString(3, uuid.toString());
-
-            return statement.executeUpdate() == 1;
-        }
-    }
-
-    public boolean changePassword(
-            UUID uuid,
-            String oldPassword,
-            String newPassword
-    ) throws SQLException {
-
-        if (uuid == null ||
-                !passwordManager.isValidPassword(newPassword)) {
-            return false;
-        }
-
-        Optional<Account> optionalAccount = getAccount(uuid);
-
-        if (optionalAccount.isEmpty()) {
-            return false;
-        }
-
-        Account account = optionalAccount.get();
-
-        if (!passwordManager.verifyPassword(
-                oldPassword,
-                account.passwordHash()
-        )) {
-            return false;
-        }
-
-        String newHash =
-                passwordManager.hashPassword(newPassword);
-
-        String sql = """
-                UPDATE vortexauth_accounts
-                SET password_hash = ?
-                WHERE uuid = ?
-                """;
-
-        try (Connection connection = database.getConnection();
-             PreparedStatement statement =
-                     connection.prepareStatement(sql)) {
-
-            statement.setString(1, newHash);
-            statement.setString(2, uuid.toString());
-
-            return statement.executeUpdate() == 1;
-        }
-    }
-
-    private Account mapAccount(ResultSet result)
-            throws SQLException {
-
-        return new Account(
-                UUID.fromString(result.getString("uuid")),
-                result.getString("username"),
-                result.getString("password_hash"),
-                result.getString("platform"),
-                result.getString("xuid"),
-                result.getBoolean("premium_enabled"),
-                result.getBoolean("premium_verified"),
-                result.getLong("created_at"),
-                result.getLong("last_login")
+        return registrationManager.register(
+                uuid, username, password,
+                confirmation, platform, xuid
         );
     }
 
-    public record Account(
+    public AuthResult login(UUID uuid, String password) {
+        return login(uuid, password, null);
+    }
+
+    public AuthResult login(
             UUID uuid,
-            String username,
-            String passwordHash,
-            String platform,
-            String xuid,
-            boolean premiumEnabled,
-            boolean premiumVerified,
-            long createdAt,
-            long lastLogin
+            String password,
+            String ipHash
     ) {
-        public boolean isPremium() {
-            return premiumEnabled && premiumVerified;
+        if (uuid == null || password == null) {
+            return AuthResult.INTERNAL_ERROR;
         }
 
-        public boolean isBedrock() {
-            return "BEDROCK".equalsIgnoreCase(platform);
+        if (!plugin.getConfig().getBoolean(
+                "authentication.enabled", true
+        )) {
+            return AuthResult.INTERNAL_ERROR;
         }
+
+        if (sessionManager.isAuthenticated(uuid)) {
+            return AuthResult.ALREADY_LOGGED_IN;
+        }
+
+        if (loginAttemptManager.isLocked(uuid)) {
+            return AuthResult.ACCOUNT_LOCKED;
+        }
+
+        try {
+            Optional<AccountManager.Account> optional =
+                    accountManager.getAccount(uuid);
+
+            if (optional.isEmpty()) {
+                return AuthResult.NOT_REGISTERED;
+            }
+
+            boolean valid = accountManager.login(uuid, password);
+
+            if (!valid) {
+                boolean locked =
+                        loginAttemptManager.recordFailedAttempt(uuid);
+
+                return locked
+                        ? AuthResult.TOO_MANY_ATTEMPTS
+                        : AuthResult.INVALID_PASSWORD;
+            }
+
+            loginAttemptManager.resetAttempts(uuid);
+            sessionManager.createSession(uuid, ipHash);
+
+            return AuthResult.SUCCESS;
+
+        } catch (SQLException exception) {
+            plugin.getLogger().severe(
+                    "Database authentication error: "
+                            + exception.getMessage()
+            );
+            return AuthResult.DATABASE_ERROR;
+
+        } catch (Exception exception) {
+            plugin.getLogger().severe(
+                    "Unexpected authentication error: "
+                            + exception.getMessage()
+            );
+            return AuthResult.INTERNAL_ERROR;
+        }
+    }
+
+    public boolean logout(UUID uuid) {
+        if (uuid == null) {
+            return false;
+        }
+
+        sessionManager.invalidateSession(uuid);
+        return true;
+    }
+
+    public boolean isAuthenticated(UUID uuid) {
+        return uuid != null && sessionManager.isAuthenticated(uuid);
+    }
+
+    public boolean isAuthenticated(UUID uuid, String ipHash) {
+        return uuid != null
+                && sessionManager.isAuthenticated(uuid, ipHash);
+    }
+
+    public boolean isRegistered(UUID uuid) {
+        if (uuid == null) {
+            return false;
+        }
+
+        try {
+            return accountManager.exists(uuid);
+        } catch (SQLException exception) {
+            plugin.getLogger().severe(
+                    "Unable to check account registration: "
+                            + exception.getMessage()
+            );
+            return false;
+        }
+    }
+
+    public boolean isLocked(UUID uuid) {
+        return uuid != null && loginAttemptManager.isLocked(uuid);
+    }
+
+    public int getRemainingAttempts(UUID uuid) {
+        return loginAttemptManager.getRemainingAttempts(uuid);
+    }
+
+    public long getRemainingLockTime(UUID uuid) {
+        return loginAttemptManager.getRemainingLockTime(uuid);
+    }
+
+    public void createBedrockSession(UUID uuid, String ipHash) {
+        if (uuid == null) {
+            return;
+        }
+
+        try {
+            if (!accountManager.exists(uuid)) {
+                return;
+            }
+
+            sessionManager.createSession(uuid, ipHash);
+            accountManager.updateLastLogin(uuid);
+            loginAttemptManager.resetAttempts(uuid);
+
+        } catch (SQLException exception) {
+            sessionManager.invalidateSession(uuid);
+
+            plugin.getLogger().severe(
+                    "Failed to create Bedrock session: "
+                            + exception.getMessage()
+            );
+        }
+    }
+
+    public void invalidateSession(UUID uuid) {
+        if (uuid != null) {
+            sessionManager.invalidateSession(uuid);
+        }
+    }
+
+    public void invalidateAllSessions() {
+        sessionManager.invalidateAll();
+    }
+
+    public AccountManager getAccountManager() {
+        return accountManager;
+    }
+
+    public SessionManager getSessionManager() {
+        return sessionManager;
+    }
+
+    public LoginAttemptManager getLoginAttemptManager() {
+        return loginAttemptManager;
+    }
+
+    public void shutdown() {
+        sessionManager.invalidateAll();
     }
 }
