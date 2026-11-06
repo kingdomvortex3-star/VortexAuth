@@ -3,6 +3,8 @@ package id.vortexauth.session;
 
 import id.vortexauth.VortexAuth;
 
+import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
 import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
@@ -23,20 +25,22 @@ public final class SessionManager {
             return;
         }
 
+        long now = System.currentTimeMillis();
         long duration = getSessionDuration();
 
-        long expiresAt = duration == Long.MAX_VALUE
-                ? Long.MAX_VALUE
-                : System.currentTimeMillis() + duration;
+        long expiresAt;
 
-        Session session = new Session(
+        if (duration == Long.MAX_VALUE
+                || Long.MAX_VALUE - now < duration) {
+            expiresAt = Long.MAX_VALUE;
+        } else {
+            expiresAt = now + duration;
+        }
+
+        sessions.put(
                 uuid,
-                ipHash,
-                System.currentTimeMillis(),
-                expiresAt
+                new Session(uuid, ipHash, now, expiresAt)
         );
-
-        sessions.put(uuid, session);
     }
 
     public boolean isAuthenticated(UUID uuid) {
@@ -85,15 +89,16 @@ public final class SessionManager {
             return false;
         }
 
-        return savedIpHash.equals(currentIpHash);
+        return MessageDigest.isEqual(
+                savedIpHash.getBytes(StandardCharsets.UTF_8),
+                currentIpHash.getBytes(StandardCharsets.UTF_8)
+        );
     }
 
     public void invalidateSession(UUID uuid) {
-        if (uuid == null) {
-            return;
+        if (uuid != null) {
+            sessions.remove(uuid);
         }
-
-        sessions.remove(uuid);
     }
 
     public void invalidateAll() {
@@ -127,19 +132,16 @@ public final class SessionManager {
 
     public int cleanupExpiredSessions() {
         int removed = 0;
+        long now = System.currentTimeMillis();
 
         for (Map.Entry<UUID, Session> entry :
                 sessions.entrySet()) {
 
             Session session = entry.getValue();
 
-            if (isExpired(session)) {
-                if (sessions.remove(
-                        entry.getKey(),
-                        session
-                )) {
-                    removed++;
-                }
+            if (isExpired(session, now)
+                    && sessions.remove(entry.getKey(), session)) {
+                removed++;
             }
         }
 
@@ -147,6 +149,10 @@ public final class SessionManager {
     }
 
     private boolean isExpired(Session session) {
+        return isExpired(session, System.currentTimeMillis());
+    }
+
+    private boolean isExpired(Session session, long now) {
         if (!plugin.getConfig().getBoolean(
                 "session.timeout.enabled",
                 true
@@ -154,26 +160,28 @@ public final class SessionManager {
             return false;
         }
 
-        return System.currentTimeMillis()
-                >= session.expiresAt();
+        return now >= session.expiresAt();
     }
 
     private long getSessionDuration() {
-        boolean enabled = plugin.getConfig().getBoolean(
+        if (!plugin.getConfig().getBoolean(
                 "session.timeout.enabled",
                 true
-        );
-
-        if (!enabled) {
+        )) {
             return Long.MAX_VALUE;
         }
 
-        long minutes = plugin.getConfig().getLong(
-                "session.timeout.duration-minutes",
-                30
+        long minutes = Math.max(
+                1L,
+                plugin.getConfig().getLong(
+                        "session.timeout.duration-minutes",
+                        30L
+                )
         );
 
-        minutes = Math.max(1, minutes);
+        if (minutes > Long.MAX_VALUE / 60_000L) {
+            return Long.MAX_VALUE;
+        }
 
         return minutes * 60_000L;
     }
