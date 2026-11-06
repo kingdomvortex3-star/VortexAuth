@@ -4,10 +4,12 @@ package id.vortexconverter.converter;
 import com.google.gson.JsonArray;
 import com.google.gson.JsonObject;
 
+import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 
-public class BlockbenchGeometryGenerator {
+public final class BlockbenchGeometryGenerator {
 
     public JsonObject generate(
             BlockbenchModelReader.BlockbenchModel model,
@@ -16,15 +18,28 @@ public class BlockbenchGeometryGenerator {
             int textureHeight
     ) {
         if (model == null) {
-            throw new IllegalArgumentException("Blockbench model cannot be null");
+            throw new IllegalArgumentException(
+                    "Blockbench model cannot be null"
+            );
         }
 
         if (identifier == null || identifier.isBlank()) {
             identifier = "geometry.vortex.model";
         }
 
+        if (textureWidth <= 0) {
+            textureWidth = model.textureWidth();
+        }
+
+        if (textureHeight <= 0) {
+            textureHeight = model.textureHeight();
+        }
+
         if (textureWidth <= 0) textureWidth = 64;
         if (textureHeight <= 0) textureHeight = 64;
+
+        Map<String, String> boneNames = new HashMap<>();
+        collectBoneNames(model.bones(), boneNames);
 
         JsonObject root = new JsonObject();
         root.addProperty("format_version", "1.12.0");
@@ -42,19 +57,10 @@ public class BlockbenchGeometryGenerator {
         geometry.add("description", description);
 
         JsonArray bones = new JsonArray();
-        Map<String, String> boneNames = new HashMap<>();
 
-        if (model.bones != null) {
-            for (BlockbenchModelReader.Bone bone : model.bones) {
-                if (bone != null && bone.uuid != null) {
-                    boneNames.put(bone.uuid, sanitizeBoneName(bone.name));
-                }
-            }
-
-            for (BlockbenchModelReader.Bone bone : model.bones) {
-                if (bone != null) {
-                    bones.add(createBone(bone, boneNames));
-                }
+        if (model.bones() != null) {
+            for (BlockbenchModelReader.Bone bone : model.bones()) {
+                addBoneRecursive(bones, bone, boneNames);
             }
         }
 
@@ -62,43 +68,74 @@ public class BlockbenchGeometryGenerator {
 
         JsonArray geometries = new JsonArray();
         geometries.add(geometry);
+
         root.add("minecraft:geometry", geometries);
 
         return root;
     }
 
-    private JsonObject createBone(
+    private void collectBoneNames(
+            List<BlockbenchModelReader.Bone> source,
+            Map<String, String> names
+    ) {
+        if (source == null) {
+            return;
+        }
+
+        for (BlockbenchModelReader.Bone bone : source) {
+            if (bone == null) {
+                continue;
+            }
+
+            if (bone.uuid() != null && !bone.uuid().isBlank()) {
+                names.put(
+                        bone.uuid(),
+                        sanitizeBoneName(bone.name())
+                );
+            }
+
+            collectBoneNames(bone.children(), names);
+        }
+    }
+
+    private void addBoneRecursive(
+            JsonArray output,
             BlockbenchModelReader.Bone bone,
             Map<String, String> boneNames
     ) {
+        if (bone == null) {
+            return;
+        }
+
         JsonObject result = new JsonObject();
 
-        String name = sanitizeBoneName(bone.name);
-        result.addProperty("name", name);
+        result.addProperty(
+                "name",
+                sanitizeBoneName(bone.name())
+        );
 
-        if (bone.parent != null && !bone.parent.isBlank()) {
-            String parentName = boneNames.get(bone.parent);
+        if (bone.parent() != null && !bone.parent().isBlank()) {
+            String parentName = boneNames.get(bone.parent());
 
             if (parentName != null) {
                 result.addProperty("parent", parentName);
             }
         }
 
-        result.add("pivot", vector(bone.pivot));
+        result.add("pivot", vector(bone.pivot()));
 
-        if (bone.rotation != null) {
-            result.add("rotation", vector(bone.rotation));
+        if (bone.rotation() != null) {
+            result.add("rotation", vector(bone.rotation()));
         }
 
         JsonArray cubes = new JsonArray();
 
-        if (bone.cubes != null) {
-            for (BlockbenchModelReader.Cube cube : bone.cubes) {
-                if (cube != null) {
-                    JsonObject cubeJson = createCube(cube);
-                    if (cubeJson != null) {
-                        cubes.add(cubeJson);
-                    }
+        if (bone.cubes() != null) {
+            for (BlockbenchModelReader.Cube cube : bone.cubes()) {
+                JsonObject cubeJson = createCube(cube);
+
+                if (cubeJson != null) {
+                    cubes.add(cubeJson);
                 }
             }
         }
@@ -107,21 +144,28 @@ public class BlockbenchGeometryGenerator {
             result.add("cubes", cubes);
         }
 
-        return result;
+        output.add(result);
+
+        if (bone.children() != null) {
+            for (BlockbenchModelReader.Bone child : bone.children()) {
+                addBoneRecursive(output, child, boneNames);
+            }
+        }
     }
 
-    private JsonObject createCube(BlockbenchModelReader.Cube cube) {
-        if (cube.from == null || cube.to == null) {
+    private JsonObject createCube(
+            BlockbenchModelReader.Cube cube
+    ) {
+        if (cube == null || cube.from() == null || cube.to() == null) {
             return null;
         }
 
-        double x = cube.from.x;
-        double y = cube.from.y;
-        double z = cube.from.z;
+        BlockbenchModelReader.Vector3 from = cube.from();
+        BlockbenchModelReader.Vector3 to = cube.to();
 
-        double sizeX = cube.to.x - cube.from.x;
-        double sizeY = cube.to.y - cube.from.y;
-        double sizeZ = cube.to.z - cube.from.z;
+        double sizeX = to.x() - from.x();
+        double sizeY = to.y() - from.y();
+        double sizeZ = to.z() - from.z();
 
         if (sizeX < 0 || sizeY < 0 || sizeZ < 0) {
             return null;
@@ -130,9 +174,9 @@ public class BlockbenchGeometryGenerator {
         JsonObject result = new JsonObject();
 
         JsonArray origin = new JsonArray();
-        origin.add(x);
-        origin.add(y);
-        origin.add(z);
+        origin.add(from.x());
+        origin.add(from.y());
+        origin.add(from.z());
 
         JsonArray size = new JsonArray();
         size.add(sizeX);
@@ -142,32 +186,34 @@ public class BlockbenchGeometryGenerator {
         result.add("origin", origin);
         result.add("size", size);
 
-        if (cube.origin != null) {
-            result.add("pivot", vector(cube.origin));
+        if (cube.origin() != null) {
+            result.add("pivot", vector(cube.origin()));
         }
 
-        if (cube.rotation != null) {
-            result.add("rotation", vector(cube.rotation));
+        if (cube.rotation() != null) {
+            result.add("rotation", vector(cube.rotation()));
         }
 
         return result;
     }
 
-    private JsonArray vector(BlockbenchModelReader.Vector3 vector) {
-        JsonArray array = new JsonArray();
+    private JsonArray vector(
+            BlockbenchModelReader.Vector3 vector
+    ) {
+        JsonArray result = new JsonArray();
 
         if (vector == null) {
-            array.add(0);
-            array.add(0);
-            array.add(0);
-            return array;
+            result.add(0);
+            result.add(0);
+            result.add(0);
+            return result;
         }
 
-        array.add(vector.x);
-        array.add(vector.y);
-        array.add(vector.z);
+        result.add(vector.x());
+        result.add(vector.y());
+        result.add(vector.z());
 
-        return array;
+        return result;
     }
 
     private String sanitizeBoneName(String name) {
