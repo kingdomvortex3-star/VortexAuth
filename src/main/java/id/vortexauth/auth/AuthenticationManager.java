@@ -5,6 +5,7 @@ import id.vortexauth.VortexAuth;
 import id.vortexauth.session.SessionManager;
 
 import java.sql.SQLException;
+import java.util.Optional;
 import java.util.UUID;
 
 public final class AuthenticationManager {
@@ -46,8 +47,7 @@ public final class AuthenticationManager {
         }
 
         if (!plugin.getConfig().getBoolean(
-                "authentication.enabled",
-                true
+                "authentication.enabled", true
         )) {
             return AuthResult.INTERNAL_ERROR;
         }
@@ -76,8 +76,7 @@ public final class AuthenticationManager {
         }
 
         if (!plugin.getConfig().getBoolean(
-                "authentication.enabled",
-                true
+                "authentication.enabled", true
         )) {
             return AuthResult.INTERNAL_ERROR;
         }
@@ -91,10 +90,10 @@ public final class AuthenticationManager {
         }
 
         try {
-            AccountManager.Account account =
+            Optional<AccountManager.Account> optionalAccount =
                     accountManager.getAccount(uuid);
 
-            if (account == null) {
+            if (optionalAccount.isEmpty()) {
                 return AuthResult.NOT_REGISTERED;
             }
 
@@ -155,23 +154,40 @@ public final class AuthenticationManager {
     }
 
     public boolean isRegistered(UUID uuid) {
-        return uuid != null && accountManager.exists(uuid);
+        if (uuid == null) {
+            return false;
+        }
+
+        try {
+            return accountManager.exists(uuid);
+        } catch (SQLException exception) {
+            plugin.getLogger().severe(
+                    "Failed to check account registration: "
+                            + exception.getMessage()
+            );
+            return false;
+        }
     }
 
     public boolean isLocked(UUID uuid) {
-        return uuid != null && loginAttemptManager.isLocked(uuid);
+        return uuid != null
+                && loginAttemptManager.isLocked(uuid);
     }
 
     public int getRemainingAttempts(UUID uuid) {
-        return loginAttemptManager.getRemainingAttempts(uuid);
+        return uuid == null
+                ? 0
+                : loginAttemptManager.getRemainingAttempts(uuid);
     }
 
     public long getRemainingLockTime(UUID uuid) {
-        return loginAttemptManager.getRemainingLockTime(uuid);
+        return uuid == null
+                ? 0L
+                : loginAttemptManager.getRemainingLockTime(uuid);
     }
 
     public void createBedrockSession(UUID uuid, String ipHash) {
-        if (uuid == null) {
+        if (uuid == null || ipHash == null) {
             return;
         }
 
