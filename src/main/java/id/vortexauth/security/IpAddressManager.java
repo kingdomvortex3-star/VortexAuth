@@ -1,108 +1,128 @@
 
-package id.vortexauth.listeners;
+package id.vortexauth.security;
 
 import id.vortexauth.VortexAuth;
-import id.vortexauth.auth.AuthenticationManager;
-import org.bukkit.ChatColor;
-import org.bukkit.entity.Player;
-import org.bukkit.event.EventHandler;
-import org.bukkit.event.EventPriority;
-import org.bukkit.event.Listener;
-import org.bukkit.event.player.PlayerJoinEvent;
-import org.bukkit.event.player.PlayerQuitEvent;
+import id.vortexauth.utils.SecurityUtils;
 
-public final class PlayerConnectionListener implements Listener {
+import org.bukkit.entity.Player;
+
+import java.io.IOException;
+import java.net.InetSocketAddress;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.security.MessageDigest;
+import java.security.SecureRandom;
+import java.util.Base64;
+import java.util.HexFormat;
+
+public final class IpAddressManager {
+
+    private static final int SECRET_LENGTH = 32;
 
     private final VortexAuth plugin;
-    private final AuthenticationManager authenticationManager;
+    private final byte[] secret;
 
-    public PlayerConnectionListener(
-            VortexAuth plugin,
-            AuthenticationManager authenticationManager
-    ) {
+    public IpAddressManager(VortexAuth plugin) throws IOException {
         this.plugin = plugin;
-        this.authenticationManager = authenticationManager;
-    }
 
-    @EventHandler(priority = EventPriority.NORMAL)
-    public void onPlayerJoin(PlayerJoinEvent event) {
-        Player player = event.getPlayer();
+        Files.createDirectories(plugin.getDataFolder().toPath());
 
-        if (!plugin.getConfig().getBoolean(
-                "authentication.enabled",
-                true
-        )) {
-            return;
-        }
+        Path secretFile = plugin.getDataFolder()
+                .toPath()
+                .resolve("ip-secret.key");
 
-        if (isValidSession(player)) {
-            return;
-        }
+        if (Files.exists(secretFile)) {
+            byte[] stored = Files.readAllBytes(secretFile);
 
-        if (authenticationManager.isAuthenticated(
-                player.getUniqueId()
-        )) {
-            authenticationManager.invalidateSession(
-                    player.getUniqueId()
-            );
-        }
+            if (stored.length == SECRET_LENGTH) {
+                this.secret = stored;
+            } else {
+                try {
+                    byte[] decoded = Base64.getDecoder().decode(stored);
 
-        player.sendMessage("");
+                    if (decoded.length != SECRET_LENGTH) {
+                        throw new IOException("Invalid IP secret length.");
+                    }
 
-        if (authenticationManager.isRegistered(
-                player.getUniqueId()
-        )) {
-            sendMessage(player, "messages.login-required");
+                    this.secret = decoded;
+                } catch (IllegalArgumentException exception) {
+                    throw new IOException(
+                            "Invalid IP secret file.",
+                            exception
+                    );
+                }
+            }
         } else {
-            sendMessage(player, "messages.register-required");
+            this.secret = new byte[SECRET_LENGTH];
+
+            new SecureRandom().nextBytes(this.secret);
+
+            Files.write(secretFile, this.secret);
         }
 
-        player.sendMessage("");
+        plugin.getLogger().info("IP address hashing initialized.");
     }
 
-    private boolean isValidSession(Player player) {
-        if (!plugin.getConfig().getBoolean(
-                "session.enabled",
-                true
-        )) {
+    public String getPlayerIpHash(Player player) {
+        if (player == null || !player.isOnline()) {
+            return null;
+        }
+
+        InetSocketAddress address = player.getAddress();
+
+        if (address == null || address.getAddress() == null) {
+            return null;
+        }
+
+        return hashAddress(
+                address.getAddress().getHostAddress()
+        );
+    }
+
+    public String hashAddress(String address) {
+        if (address == null || address.isBlank()) {
+            return null;
+        }
+
+        try {
+            return SecurityUtils.hashIp(
+                    address.trim(),
+                    secret
+            );
+        } catch (Exception exception) {
+            plugin.getLogger().warning(
+                    "Failed to hash IP address."
+            );
+            return null;
+        }
+    }
+
+    public boolean matches(String address, String expectedHash) {
+        if (expectedHash == null || expectedHash.isBlank()) {
             return false;
         }
 
-        if (plugin.getIpAddressManager() == null) {
+        String actualHash = hashAddress(address);
+
+        if (actualHash == null) {
             return false;
         }
 
-        String ipHash = plugin.getIpAddressManager()
-                .getPlayerIpHash(player);
-
-        return authenticationManager.isAuthenticated(
-                player.getUniqueId(),
-                ipHash
+        return MessageDigest.isEqual(
+                actualHash.getBytes(java.nio.charset.StandardCharsets.UTF_8),
+                expectedHash.getBytes(java.nio.charset.StandardCharsets.UTF_8)
         );
     }
 
-    @EventHandler(priority = EventPriority.MONITOR)
-    public void onPlayerQuit(PlayerQuitEvent event) {
-        // Session tidak dihapus saat pemain disconnect.
-        // Session tetap berlaku sampai kedaluwarsa.
-    }
+    public String getServerSecretIdentifier() {
+        try {
+            byte[] digest = MessageDigest.getInstance("SHA-256")
+                    .digest(secret);
 
-    private void sendMessage(Player player, String path) {
-        String prefix = plugin.getConfig().getString(
-                "messages.prefix",
-                "&8[&bVortexAuth&8] "
-        );
+            return HexFormat.of().formatHex(digest, 0, 8);
 
-        String message = plugin.getConfig().getString(
-                path,
-                "&cAuthentication required."
-        );
-
-        player.sendMessage(
-                ChatColor.translateAlternateColorCodes(
-                        '&',
-                        prefix + message
-                )
-        );
+        } catch (Exception exception) {
+            return "unavailable";
+        }
     }
 }
