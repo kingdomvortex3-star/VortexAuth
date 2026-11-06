@@ -1,18 +1,20 @@
 
 package id.vortexauth.auth;
 
-import org.mindrot.jbcrypt.BCrypt;
-
 import id.vortexauth.VortexAuth;
+
+import org.mindrot.jbcrypt.BCrypt;
 
 import java.nio.charset.StandardCharsets;
 
 public final class PasswordManager {
 
-    private final VortexAuth plugin;
-
     private static final int DEFAULT_STRENGTH = 12;
+    private static final int MIN_STRENGTH = 10;
+    private static final int MAX_STRENGTH = 14;
     private static final int MAX_BCRYPT_BYTES = 72;
+
+    private final VortexAuth plugin;
 
     public PasswordManager(VortexAuth plugin) {
         this.plugin = plugin;
@@ -26,7 +28,10 @@ public final class PasswordManager {
                 DEFAULT_STRENGTH
         );
 
-        strength = Math.max(10, Math.min(strength, 14));
+        strength = Math.max(
+                MIN_STRENGTH,
+                Math.min(strength, MAX_STRENGTH)
+        );
 
         return BCrypt.hashpw(
                 password,
@@ -73,13 +78,18 @@ public final class PasswordManager {
                 32
         );
 
-        if (password.length() < minimum
-                || password.length() > maximum) {
+        if (minimum < 1 || maximum < minimum) {
             return false;
         }
 
-        return password.getBytes(StandardCharsets.UTF_8).length
-                <= MAX_BCRYPT_BYTES;
+        int length = password.length();
+        int byteLength = password.getBytes(
+                StandardCharsets.UTF_8
+        ).length;
+
+        return length >= minimum
+                && length <= maximum
+                && byteLength <= MAX_BCRYPT_BYTES;
     }
 
     public void validatePassword(String password) {
@@ -94,10 +104,8 @@ public final class PasswordManager {
             String password,
             String confirmation
     ) {
-        if (password == null || confirmation == null) {
-            return false;
-        }
-
-        return password.equals(confirmation);
+        return password != null
+                && confirmation != null
+                && password.equals(confirmation);
     }
 }
