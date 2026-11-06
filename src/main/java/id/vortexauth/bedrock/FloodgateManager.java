@@ -4,10 +4,13 @@ package id.vortexauth.bedrock;
 import id.vortexauth.VortexAuth;
 import id.vortexauth.auth.AccountManager;
 import id.vortexauth.auth.AccountManager.Account;
+import id.vortexauth.utils.SecurityUtils;
+
 import org.bukkit.entity.Player;
 import org.geysermc.floodgate.api.FloodgateApi;
 
 import java.sql.SQLException;
+import java.util.Optional;
 import java.util.UUID;
 
 public final class FloodgateManager {
@@ -46,9 +49,13 @@ public final class FloodgateManager {
             return false;
         }
 
-        return floodgateApi.isFloodgatePlayer(
-                player.getUniqueId()
-        );
+        try {
+            return floodgateApi.isFloodgatePlayer(
+                    player.getUniqueId()
+            );
+        } catch (Exception exception) {
+            return false;
+        }
     }
 
     public String getXuid(Player player) {
@@ -57,20 +64,25 @@ public final class FloodgateManager {
         }
 
         try {
-            String xuid = floodgateApi
-                    .getPlayer(player.getUniqueId())
-                    .getXuid();
+            var floodgatePlayer = floodgateApi.getPlayer(
+                    player.getUniqueId()
+            );
 
-            if (!isValidXuid(xuid)) {
+            if (floodgatePlayer == null) {
                 return null;
             }
 
-            return xuid;
+            String xuid = floodgatePlayer.getXuid();
+
+            return SecurityUtils.isValidXuid(xuid)
+                    ? xuid
+                    : null;
 
         } catch (Exception exception) {
             plugin.getLogger().warning(
                     "Failed to retrieve Floodgate XUID."
             );
+
             return null;
         }
     }
@@ -82,15 +94,14 @@ public final class FloodgateManager {
             return null;
         }
 
-        return accountManager.getAccountByXuid(xuid);
+        Optional<Account> account =
+                accountManager.getAccountByXuid(xuid);
+
+        return account.orElse(null);
     }
 
     public boolean isValidXuid(String xuid) {
-        if (xuid == null || xuid.isBlank()) {
-            return false;
-        }
-
-        return xuid.matches("[0-9]{1,20}");
+        return SecurityUtils.isValidXuid(xuid);
     }
 
     public boolean hasLinkedAccount(Player player) throws SQLException {
