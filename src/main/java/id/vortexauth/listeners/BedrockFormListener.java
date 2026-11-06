@@ -19,48 +19,43 @@ import java.sql.SQLException;
 public final class BedrockFormListener implements Listener {
 
     private final VortexAuth plugin;
-    private final FloodgateManager floodgateManager;
-    private final BedrockFormManager formManager;
     private final AccountManager accountManager;
     private final AuthenticationManager authenticationManager;
+    private final FloodgateManager floodgateManager;
+    private final BedrockFormManager formManager;
 
     public BedrockFormListener(
             VortexAuth plugin,
-            FloodgateManager floodgateManager,
-            BedrockFormManager formManager,
             AccountManager accountManager,
-            AuthenticationManager authenticationManager
+            AuthenticationManager authenticationManager,
+            FloodgateManager floodgateManager,
+            BedrockFormManager formManager
     ) {
         this.plugin = plugin;
-        this.floodgateManager = floodgateManager;
-        this.formManager = formManager;
         this.accountManager = accountManager;
         this.authenticationManager = authenticationManager;
+        this.floodgateManager = floodgateManager;
+        this.formManager = formManager;
     }
 
     @EventHandler(priority = EventPriority.MONITOR)
     public void onJoin(PlayerJoinEvent event) {
         Player player = event.getPlayer();
 
-        if (!plugin.getConfig().getBoolean(
-                "bedrock.enabled", true
-        )) {
+        if (!plugin.getConfig().getBoolean("bedrock.enabled", true)) {
             return;
         }
 
-        if (!plugin.getConfig().getBoolean(
-                "bedrock.ui.enabled", true
-        )) {
+        if (!plugin.getConfig().getBoolean("bedrock.ui.enabled", true)) {
             return;
         }
 
-        if (!floodgateManager.isBedrock(player)) {
+        if (!floodgateManager.isAvailable()
+                || !floodgateManager.isBedrock(player)) {
             return;
         }
 
-        if (authenticationManager.isAuthenticated(
-                player.getUniqueId()
-        )) {
+        if (authenticationManager.isAuthenticated(player.getUniqueId())) {
             return;
         }
 
@@ -77,16 +72,14 @@ public final class BedrockFormListener implements Listener {
             return;
         }
 
-        if (authenticationManager.isAuthenticated(
-                player.getUniqueId()
-        )) {
+        if (authenticationManager.isAuthenticated(player.getUniqueId())) {
             return;
         }
 
         try {
             String xuid = floodgateManager.getXuid(player);
 
-            if (xuid == null) {
+            if (!SecurityUtils.isValidXuid(xuid)) {
                 player.kickPlayer(
                         ChatColor.RED + "Invalid Floodgate identity."
                 );
@@ -100,14 +93,12 @@ public final class BedrockFormListener implements Listener {
             if (!linked) {
                 player.sendMessage(
                         ChatColor.RED
-                                + "Akun Bedrock kamu belum terhubung."
+                                + "Akun Bedrock kamu belum tertaut."
                 );
-
                 player.sendMessage(
-                        ChatColor.GRAY
-                                + "Hubungi administrator untuk linking akun."
+                        ChatColor.YELLOW
+                                + "Silakan hubungi administrator untuk menghubungkan akun."
                 );
-
                 return;
             }
 
