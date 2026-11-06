@@ -3,6 +3,8 @@ package id.vortexconverter.commands;
 
 import id.vortexconverter.VortexConverter;
 import id.vortexconverter.converter.BlockbenchPackPipeline;
+import id.vortexconverter.converter.ItemsAdderBedrockConversionService;
+import id.vortexconverter.converter.ItemsAdderBedrockConversionService.ConversionResult;
 import id.vortexconverter.mappings.ItemsAdderMappingService;
 import id.vortexconverter.scanner.ItemsAdderScanner;
 import id.vortexconverter.scanner.ItemsAdderConfigParser;
@@ -32,6 +34,7 @@ public final class CommandManager implements CommandExecutor, TabCompleter {
     private final ItemsAdderAssetResolver resolver;
     private final BlockbenchPackPipeline blockbenchPipeline;
     private final ItemsAdderMappingService mappingService;
+    private final ItemsAdderBedrockConversionService bedrockConversionService;
 
     public CommandManager(VortexConverter plugin) {
         this.plugin = plugin;
@@ -40,6 +43,8 @@ public final class CommandManager implements CommandExecutor, TabCompleter {
         this.resolver = new ItemsAdderAssetResolver();
         this.blockbenchPipeline = new BlockbenchPackPipeline();
         this.mappingService = new ItemsAdderMappingService();
+        this.bedrockConversionService =
+                new ItemsAdderBedrockConversionService();
     }
 
     @Override
@@ -64,7 +69,7 @@ public final class CommandManager implements CommandExecutor, TabCompleter {
 
             case "scan" -> scanPlugins(sender);
 
-            case "itemsadder" -> scanItemsAdder(sender);
+            case "itemsadder" -> handleItemsAdder(sender, args);
 
             case "report" -> sendReport(sender);
 
@@ -91,6 +96,9 @@ public final class CommandManager implements CommandExecutor, TabCompleter {
         sender.sendMessage("§b/vortexconvert help §7- Help");
         sender.sendMessage("§b/vortexconvert scan §7- Scan integrations");
         sender.sendMessage("§b/vortexconvert itemsadder §7- Scan ItemsAdder");
+        sender.sendMessage(
+                "§b/vortexconvert itemsadder convert §7- Build Bedrock resource pack"
+        );
         sender.sendMessage("§b/vortexconvert report §7- Server report");
         sender.sendMessage("§b/vortexconvert reload §7- Reload config");
         sender.sendMessage(
@@ -99,10 +107,156 @@ public final class CommandManager implements CommandExecutor, TabCompleter {
         sender.sendMessage(
                 "§b/vortexconvert mappings generate §7- Generate Geyser mappings"
         );
-        sender.sendMessage(
-                "§b/vortexconvert mappings help §7- Mapping commands"
-        );
         sender.sendMessage("§8--------------------------------");
+    }
+
+    private void handleItemsAdder(
+            CommandSender sender,
+            String[] args
+    ) {
+        if (args.length == 1
+                || args[1].equalsIgnoreCase("scan")) {
+            scanItemsAdder(sender);
+            return;
+        }
+
+        if (args[1].equalsIgnoreCase("convert")) {
+            convertItemsAdder(sender);
+            return;
+        }
+
+        sender.sendMessage("§cUnknown ItemsAdder command.");
+        sender.sendMessage("§7Use /vortexconvert itemsadder scan");
+        sender.sendMessage("§7Use /vortexconvert itemsadder convert");
+    }
+
+    private void convertItemsAdder(CommandSender sender) {
+        Plugin itemsAdder = Bukkit.getPluginManager()
+                .getPlugin("ItemsAdder");
+
+        if (itemsAdder == null || !itemsAdder.isEnabled()) {
+            sender.sendMessage(
+                    "§cItemsAdder is not installed or enabled."
+            );
+            return;
+        }
+
+        File contents = new File(
+                itemsAdder.getDataFolder(),
+                "contents"
+        );
+
+        if (!contents.isDirectory()) {
+            sender.sendMessage(
+                    "§cItemsAdder contents folder not found:"
+            );
+            sender.sendMessage("§7" + contents.getPath());
+            return;
+        }
+
+        File outputDirectory = plugin.getOutputFolder();
+
+        if (outputDirectory == null) {
+            sender.sendMessage("§cOutput directory is unavailable.");
+            return;
+        }
+
+        sender.sendMessage("§8--------------------------------");
+        sender.sendMessage("§b§lVortexConverter Bedrock");
+        sender.sendMessage("§7Starting ItemsAdder conversion...");
+        sender.sendMessage("§7Source: §f" + contents.getPath());
+        sender.sendMessage("§7Output: §f" + outputDirectory.getPath());
+        sender.sendMessage("§8--------------------------------");
+
+        try {
+            ConversionResult result =
+                    bedrockConversionService.convert(
+                            contents,
+                            outputDirectory
+                    );
+
+            sender.sendMessage("§8--------------------------------");
+            sender.sendMessage("§a§lBEDROCK PACK GENERATED");
+            sender.sendMessage("§7YAML files read: §f"
+                    + result.filesRead());
+            sender.sendMessage("§7Total assets: §f"
+                    + result.totalAssets());
+            sender.sendMessage("§7Items discovered: §f"
+                    + result.discoveredItems());
+            sender.sendMessage("§7Textures copied: §a"
+                    + result.convertedTextures());
+            sender.sendMessage("§7Items skipped: §e"
+                    + result.skippedItems());
+
+            if (result.packFile() != null) {
+                sender.sendMessage("§8--------------------------------");
+                sender.sendMessage("§aResource pack created:");
+                sender.sendMessage("§f" + result.packFile().getPath());
+            }
+
+            sendWarnings(sender, result.warnings());
+
+            if (result.skippedDetails() != null
+                    && !result.skippedDetails().isEmpty()) {
+                sender.sendMessage("§8--------------------------------");
+                sender.sendMessage("§e[SKIPPED ITEMS]");
+
+                int shown = 0;
+
+                for (String detail : result.skippedDetails()) {
+                    if (shown >= 10) {
+                        sender.sendMessage(
+                                "§7...and more skipped items."
+                        );
+                        break;
+                    }
+
+                    sender.sendMessage("§e- " + detail);
+                    shown++;
+                }
+            }
+
+            sender.sendMessage("§8--------------------------------");
+
+            if (result.isSuccessful()) {
+                sender.sendMessage(
+                        "§aResource pack generation completed."
+                );
+                sender.sendMessage(
+                        "§7This pack currently contains converted textures "
+                                + "and basic Bedrock pack metadata."
+                );
+                sender.sendMessage(
+                        "§7Advanced model conversion is not included yet."
+                );
+            } else {
+                sender.sendMessage(
+                        "§cResource pack generation was unsuccessful."
+                );
+            }
+
+            sender.sendMessage("§8--------------------------------");
+
+        } catch (IOException exception) {
+            sender.sendMessage("§cItemsAdder conversion failed:");
+            sender.sendMessage("§7" + exception.getMessage());
+
+            plugin.getLogger().severe(
+                    "ItemsAdder Bedrock conversion failed: "
+                            + exception.getMessage()
+            );
+
+        } catch (Exception exception) {
+            sender.sendMessage(
+                    "§cUnexpected conversion error. Check console."
+            );
+
+            plugin.getLogger().severe(
+                    "Unexpected ItemsAdder Bedrock conversion error:"
+            );
+
+            exception.printStackTrace();
+        }
     }
 
     private void handleMappings(
@@ -640,6 +794,14 @@ public final class CommandManager implements CommandExecutor, TabCompleter {
                             "convert",
                             "mappings"
                     )
+            );
+        }
+
+        if (args.length == 2
+                && args[0].equalsIgnoreCase("itemsadder")) {
+            return filter(
+                    args[1],
+                    List.of("scan", "convert")
             );
         }
 
