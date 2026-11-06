@@ -82,9 +82,8 @@ public class ItemsAdderMappingService {
         List<String> parseErrors = new ArrayList<>();
 
         if (parseResult.hasErrors()) {
-            warnings.add(
-                    "ItemsAdder parser melaporkan kesalahan. "
-                            + "Periksa konfigurasi ItemsAdder."
+            parseErrors.add(
+                    "Parser menemukan kesalahan saat membaca konfigurasi ItemsAdder."
             );
         }
 
@@ -104,19 +103,19 @@ public class ItemsAdderMappingService {
             );
         }
 
-        ItemsAdderCustomMappingGenerator.MappingResult exportedResult =
+        ItemsAdderMappingExporter.ExportResult exportResult =
                 exporter.export(
                         mappingResult,
                         geyserDataDirectory
                 );
 
-        if (exportedResult == null) {
+        if (exportResult == null || !exportResult.isSuccessful()) {
             throw new IOException(
-                    "Mapping exporter tidak mengembalikan hasil."
+                    "Proses export mapping Geyser gagal."
             );
         }
 
-        File outputFile = exportedResult.outputFile();
+        File outputFile = exportResult.mappingFile();
 
         if (outputFile == null || !outputFile.isFile()) {
             throw new IOException(
@@ -129,8 +128,9 @@ public class ItemsAdderMappingService {
                 parseResult.getFilesRead(),
                 parseResult.getAssets().size(),
                 mappingResult.discoveredItems(),
-                mappingResult.generatedMappings(),
-                mappingResult.skippedCount(),
+                exportResult.exportedMappings(),
+                mappingResult.skippedCount()
+                        + exportResult.skippedItems(),
                 warnings,
                 skippedDetails,
                 parseErrors,
@@ -150,8 +150,21 @@ public class ItemsAdderMappingService {
             List<String> parseErrors,
             File outputFile
     ) {
+
         public boolean isSuccessful() {
             return successful;
+        }
+
+        public int warningCount() {
+            return warnings == null ? 0 : warnings.size();
+        }
+
+        public int parseErrorCount() {
+            return parseErrors == null ? 0 : parseErrors.size();
+        }
+
+        public boolean hasOutput() {
+            return outputFile != null && outputFile.isFile();
         }
     }
 }
