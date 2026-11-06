@@ -18,7 +18,9 @@ import java.nio.file.StandardCopyOption;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.UUID;
 import java.util.zip.ZipEntry;
@@ -78,16 +80,21 @@ public class ItemsAdderBedrockResourcePackBuilder {
         List<String> warnings = new ArrayList<>();
         List<String> skipped = new ArrayList<>();
 
-        Map<String, List<File>> textureIndex =
-                indexTextures(itemsAdderContents);
+        TextureIndex textureIndex = indexTextures(itemsAdderContents);
 
         JsonObject textureData = new JsonObject();
 
         JsonObject items = mappingResult.mapping()
                 .getAsJsonObject("items");
 
+        if (items == null) {
+            throw new IOException("Mapping tidak memiliki objek items.");
+        }
+
         int discoveredItems = 0;
         int copiedTextures = 0;
+
+        Map<String, String> generatedAtlasKeys = new LinkedHashMap<>();
 
         for (ItemsAdderConfigParser.AssetInfo asset
                 : parseResult.getAssets()) {
@@ -103,11 +110,19 @@ public class ItemsAdderBedrockResourcePackBuilder {
 
             if (javaIdentifier == null || !items.has(javaIdentifier)) {
                 skipped.add(asset.getNamespacedId()
-                        + ": mapping tidak ditemukan.");
+                        + ": mapping Java tidak ditemukan.");
                 continue;
             }
 
-            JsonArray definitions = items.getAsJsonArray(javaIdentifier);
+            JsonArray definitions;
+
+            try {
+                definitions = items.getAsJsonArray(javaIdentifier);
+            } catch (Exception exception) {
+                skipped.add(asset.getNamespacedId()
+                        + ": format definisi mapping tidak valid.");
+                continue;
+            }
 
             if (definitions == null || definitions.isEmpty()) {
                 skipped.add(asset.getNamespacedId()
@@ -115,29 +130,52 @@ public class ItemsAdderBedrockResourcePackBuilder {
                 continue;
             }
 
-            JsonObject definition = definitions.get(0).getAsJsonObject();
+            JsonObject definition =
+                    definitions.get(0).getAsJsonObject();
 
-            String bedrockIdentifier =
-                    definition.get("bedrock_identifier").getAsString();
-
-            String atlasKey = toAtlasKey(bedrockIdentifier);
-            String texturePath = asset.getTexturePath();
-
-            if (texturePath == null || texturePath.isBlank()) {
+            if (!definition.has("bedrock_identifier")) {
                 skipped.add(asset.getNamespacedId()
-                        + ": texture path tidak ditemukan.");
+                        + ": Bedrock identifier tidak ditemukan.");
                 continue;
             }
 
-            File sourceTexture = resolveTexture(
-                    texturePath,
-                    textureIndex
-            );
+            String bedrockIdentifier = definition
+                    .get("bedrock_identifier")
+                    .getAsString();
+
+            String atlasKey = toAtlasKey(bedrockIdentifier);
+
+            if (generatedAtlasKeys.containsKey(bedrockIdentifier)) {
+                continue;
+            }
+
+            List<String> textureReferences =
+                    findTextureReferences(asset);
+
+            if (textureReferences.isEmpty()) {
+                skipped.add(asset.getNamespacedId()
+                        + ": referensi tekstur tidak ditemukan.");
+                continue;
+            }
+
+            File sourceTexture = null;
+
+            for (String reference : textureReferences) {
+                sourceTexture = resolveTexture(
+                        reference,
+                        asset.getNamespace(),
+                        textureIndex
+                );
+
+                if (sourceTexture != null) {
+                    break;
+                }
+            }
 
             if (sourceTexture == null) {
                 skipped.add(asset.getNamespacedId()
-                        + ": tekstur tidak ditemukan atau ambigu: "
-                        + texturePath);
+                        + ": file tekstur tidak ditemukan. Referensi: "
+                        + String.join(", ", textureReferences));
                 continue;
             }
 
@@ -153,21 +191,25 @@ public class ItemsAdderBedrockResourcePackBuilder {
             );
 
             JsonObject textureEntry = new JsonObject();
-
-            // Geyser/Bedrock item_texture.json menggunakan string path.
             textureEntry.addProperty(
                     "textures",
                     "textures/items/" + atlasKey
             );
 
             textureData.add(bedrockIdentifier, textureEntry);
+
+            generatedAtlasKeys.put(
+                    bedrockIdentifier,
+                    sourceTexture.getAbsolutePath()
+            );
+
             copiedTextures++;
         }
 
         if (copiedTextures == 0) {
             throw new IOException(
-                    "Tidak ada tekstur item yang berhasil dikonversi. "
-                            + "Periksa konfigurasi texture ItemsAdder."
+                    "Tidak ada tekstur yang berhasil dikonversi. "
+                            + "Periksa hasil scan YAML, mapping, dan referensi tekstur."
             );
         }
 
@@ -197,12 +239,41 @@ public class ItemsAdderBedrockResourcePackBuilder {
                 "VortexConverter-Bedrock.mcpack"
         );
 
-        createArchive(workingDirectory, packFile);
+        File temporaryPack = new File(
+                packsDirectory,
+                "VortexConverter-Bedrock.tmp"
+        );
+
+        if (temporaryPack.exists() && !temporaryPack.delete()) {
+            throw new IOException("Tidak dapat menghapus pack sementara.");
+        }
+
+        createArchive(workingDirectory, temporaryPack);
+
+        try {
+            Files.move(
+                    temporaryPack.toPath(),
+                    packFile.toPath(),
+                    StandardCopyOption.REPLACE_EXISTING,
+                    StandardCopyOption.ATOMIC_MOVE
+            );
+        } catch (IOException exception) {
+            Files.move(
+                    temporaryPack.toPath(),
+                    packFile.toPath(),
+                    StandardCopyOption.REPLACE_EXISTING
+            );
+        }
 
         warnings.add(
-                "Pack saat ini berisi tekstur item dan metadata dasar. "
-                        + "Model 3D, block, furniture, dan animasi "
-                        + "belum dikonversi oleh builder ini."
+                "Builder ini mengemas tekstur item yang memiliki mapping. "
+                        + "Model 3D, block, furniture, entity, animasi, "
+                        + "dan suara belum diterjemahkan menjadi format Bedrock."
+        );
+
+        warnings.add(
+                "Mapping dan resource pack harus menggunakan identifier "
+                        + "yang sama agar tekstur dapat dipasangkan."
         );
 
         return new PackResult(
@@ -217,31 +288,119 @@ public class ItemsAdderBedrockResourcePackBuilder {
         );
     }
 
-    private Map<String, List<File>> indexTextures(File root)
+    private List<String> findTextureReferences(
+            ItemsAdderConfigParser.AssetInfo asset
+    ) {
+        List<String> references = new ArrayList<>();
+
+        Map<String, String> properties = asset.getProperties();
+
+        String[] preferredKeys = {
+                "resource.textures",
+                "resource.texture",
+                "textures",
+                "texture",
+                "resource.texture_path",
+                "texture_path"
+        };
+
+        for (String preferred : preferredKeys) {
+            for (Map.Entry<String, String> entry : properties.entrySet()) {
+                if (!entry.getKey().equalsIgnoreCase(preferred)) {
+                    continue;
+                }
+
+                addTextureValues(references, entry.getValue());
+            }
+        }
+
+        if (references.isEmpty()) {
+            for (Map.Entry<String, String> entry : properties.entrySet()) {
+                String key = entry.getKey().toLowerCase(Locale.ROOT);
+
+                if (key.equals("resource.material")
+                        || key.endsWith(".material")
+                        || key.contains("material")
+                        || key.contains("model")
+                        || key.contains("geometry")) {
+                    continue;
+                }
+
+                if (key.equals("texture")
+                        || key.endsWith(".texture")
+                        || key.equals("textures")
+                        || key.endsWith(".textures")
+                        || key.contains("texture_path")) {
+                    addTextureValues(references, entry.getValue());
+                }
+            }
+        }
+
+        return references.stream()
+                .distinct()
+                .toList();
+    }
+
+    private void addTextureValues(
+            List<String> references,
+            String value
+    ) {
+        if (value == null || value.isBlank()) {
+            return;
+        }
+
+        String cleaned = value.trim();
+
+        if (cleaned.startsWith("[") && cleaned.endsWith("]")) {
+            cleaned = cleaned.substring(1, cleaned.length() - 1);
+        }
+
+        for (String part : cleaned.split(",")) {
+            String reference = part.trim()
+                    .replace("\"", "")
+                    .replace("'", "");
+
+            if (reference.isBlank()) {
+                continue;
+            }
+
+            if (reference.contains("{")
+                    || reference.contains("}")) {
+                continue;
+            }
+
+            references.add(reference);
+        }
+    }
+
+    private TextureIndex indexTextures(File root)
             throws IOException {
 
-        Map<String, List<File>> index = new HashMap<>();
+        TextureIndex index = new TextureIndex();
 
-        try (var stream = Files.walk(root.toPath())) {
-            stream.filter(Files::isRegularFile)
-                    .filter(path -> path.toString()
-                            .toLowerCase()
+        Path rootPath = root.toPath().toRealPath();
+
+        try (var stream = Files.walk(rootPath)) {
+            for (Path path : stream
+                    .filter(Files::isRegularFile)
+                    .filter(candidate -> candidate.getFileName()
+                            .toString()
+                            .toLowerCase(Locale.ROOT)
                             .endsWith(".png"))
-                    .forEach(path -> {
-                        String filename = path.getFileName()
-                                .toString()
-                                .toLowerCase();
+                    .toList()) {
 
-                        String key = filename.substring(
-                                0,
-                                filename.length() - 4
-                        );
+                Path realPath = path.toRealPath();
 
-                        index.computeIfAbsent(
-                                key,
-                                ignored -> new ArrayList<>()
-                        ).add(path.toFile());
-                    });
+                if (!realPath.startsWith(rootPath)) {
+                    continue;
+                }
+
+                String relative = rootPath.relativize(realPath)
+                        .toString()
+                        .replace('\\', '/');
+
+                index.add(relative, realPath.toFile());
+            }
         }
 
         return index;
@@ -249,11 +408,82 @@ public class ItemsAdderBedrockResourcePackBuilder {
 
     private File resolveTexture(
             String texturePath,
-            Map<String, List<File>> textureIndex
+            String namespace,
+            TextureIndex index
     ) {
-        String normalized = texturePath
-                .replace('\\', '/')
-                .trim();
+        if (texturePath == null || texturePath.isBlank()) {
+            return null;
+        }
+
+        String normalized = normalizePath(texturePath);
+
+        if (normalized.isBlank()) {
+            return null;
+        }
+
+        String namespacePrefix =
+                namespace.toLowerCase(Locale.ROOT) + "/";
+
+        if (normalized.startsWith(namespacePrefix)) {
+            normalized = normalized.substring(namespacePrefix.length());
+        }
+
+        List<String> candidates = new ArrayList<>();
+
+        candidates.add(normalized);
+
+        if (!normalized.startsWith("textures/")) {
+            candidates.add("textures/" + normalized);
+        }
+
+        if (!normalized.startsWith("resource/")) {
+            candidates.add("resource/" + normalized);
+        }
+
+        for (String candidate : candidates) {
+            String withExtension = candidate.toLowerCase(Locale.ROOT);
+
+            if (!withExtension.endsWith(".png")) {
+                withExtension += ".png";
+            }
+
+            File exact = index.findExact(withExtension);
+
+            if (exact != null) {
+                return exact;
+            }
+
+            File suffix = index.findSuffix(withExtension);
+
+            if (suffix != null) {
+                return suffix;
+            }
+        }
+
+        String basename = normalized.substring(
+                normalized.lastIndexOf('/') + 1
+        );
+
+        if (!basename.toLowerCase(Locale.ROOT).endsWith(".png")) {
+            basename += ".png";
+        }
+
+        File namespaceMatch = index.findNamespaceBasename(
+                namespace,
+                basename
+        );
+
+        if (namespaceMatch != null) {
+            return namespaceMatch;
+        }
+
+        return index.findUniqueBasename(basename);
+    }
+
+    private String normalizePath(String value) {
+        String normalized = value
+                .trim()
+                .replace('\\', '/');
 
         int colon = normalized.indexOf(':');
 
@@ -261,35 +491,24 @@ public class ItemsAdderBedrockResourcePackBuilder {
             normalized = normalized.substring(colon + 1);
         }
 
+        while (normalized.startsWith("./")) {
+            normalized = normalized.substring(2);
+        }
+
         while (normalized.startsWith("/")) {
             normalized = normalized.substring(1);
         }
 
-        if (normalized.toLowerCase().endsWith(".png")) {
-            normalized = normalized.substring(
-                    0,
-                    normalized.length() - 4
-            );
-        }
-
-        String filename = normalized.substring(
-                normalized.lastIndexOf('/') + 1
-        ).toLowerCase();
-
-        List<File> matches = textureIndex.get(filename);
-
-        if (matches == null || matches.size() != 1) {
-            return null;
-        }
-
-        return matches.get(0);
+        return normalized;
     }
 
     private String toAtlasKey(String identifier) {
         return identifier
                 .replace(':', '.')
                 .replace('/', '_')
-                .toLowerCase();
+                .replace('\\', '_')
+                .replaceAll("[^a-zA-Z0-9_.-]", "_")
+                .toLowerCase(Locale.ROOT);
     }
 
     private void writeManifest(File directory)
@@ -403,6 +622,103 @@ public class ItemsAdderBedrockResourcePackBuilder {
                     .toList()) {
                 Files.deleteIfExists(path);
             }
+        }
+    }
+
+    private static final class TextureIndex {
+
+        private final Map<String, File> exact = new HashMap<>();
+        private final Map<String, List<File>> basenames = new HashMap<>();
+
+        void add(String relativePath, File file) {
+            String normalized = relativePath
+                    .replace('\\', '/')
+                    .toLowerCase(Locale.ROOT);
+
+            exact.put(normalized, file);
+
+            String basename = file.getName()
+                    .toLowerCase(Locale.ROOT);
+
+            basenames.computeIfAbsent(
+                    basename,
+                    ignored -> new ArrayList<>()
+            ).add(file);
+        }
+
+        File findExact(String path) {
+            return exact.get(
+                    path.replace('\\', '/')
+                            .toLowerCase(Locale.ROOT)
+            );
+        }
+
+        File findSuffix(String suffix) {
+            String normalized = suffix
+                    .replace('\\', '/')
+                    .toLowerCase(Locale.ROOT);
+
+            File match = null;
+
+            for (Map.Entry<String, File> entry : exact.entrySet()) {
+                if (!entry.getKey().endsWith("/" + normalized)) {
+                    continue;
+                }
+
+                if (match != null) {
+                    return null;
+                }
+
+                match = entry.getValue();
+            }
+
+            return match;
+        }
+
+        File findNamespaceBasename(
+                String namespace,
+                String basename
+        ) {
+            List<File> matches = basenames.get(
+                    basename.toLowerCase(Locale.ROOT)
+            );
+
+            if (matches == null) {
+                return null;
+            }
+
+            File match = null;
+            String prefix = namespace.toLowerCase(Locale.ROOT) + "/";
+
+            for (File file : matches) {
+                String path = file.getPath()
+                        .replace('\\', '/')
+                        .toLowerCase(Locale.ROOT);
+
+                if (!path.contains(prefix)) {
+                    continue;
+                }
+
+                if (match != null) {
+                    return null;
+                }
+
+                match = file;
+            }
+
+            return match;
+        }
+
+        File findUniqueBasename(String basename) {
+            List<File> matches = basenames.get(
+                    basename.toLowerCase(Locale.ROOT)
+            );
+
+            if (matches == null || matches.size() != 1) {
+                return null;
+            }
+
+            return matches.get(0);
         }
     }
 
