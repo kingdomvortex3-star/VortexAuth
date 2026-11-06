@@ -20,12 +20,16 @@ public final class ItemsAdderAssetResolver {
     public static final class ResolvedAsset {
 
         private final ItemsAdderConfigParser.AssetInfo asset;
+
         private final Map<String, List<File>> resolvedFiles =
                 new LinkedHashMap<>();
+
         private final List<String> missingReferences =
                 new ArrayList<>();
 
-        public ResolvedAsset(ItemsAdderConfigParser.AssetInfo asset) {
+        public ResolvedAsset(
+                ItemsAdderConfigParser.AssetInfo asset
+        ) {
             this.asset = asset;
         }
 
@@ -39,7 +43,9 @@ public final class ItemsAdderAssetResolver {
             resolvedFiles.forEach(
                     (key, value) -> copy.put(
                             key,
-                            Collections.unmodifiableList(value)
+                            Collections.unmodifiableList(
+                                    new ArrayList<>(value)
+                            )
                     )
             );
 
@@ -47,7 +53,9 @@ public final class ItemsAdderAssetResolver {
         }
 
         public List<String> getMissingReferences() {
-            return Collections.unmodifiableList(missingReferences);
+            return Collections.unmodifiableList(
+                    missingReferences
+            );
         }
 
         public int getResolvedFileCount() {
@@ -63,7 +71,9 @@ public final class ItemsAdderAssetResolver {
 
     public static final class ResolutionResult {
 
-        private final List<ResolvedAsset> assets = new ArrayList<>();
+        private final List<ResolvedAsset> assets =
+                new ArrayList<>();
+
         private int scannedFiles;
         private int resolvedFiles;
         private int missingReferences;
@@ -95,7 +105,8 @@ public final class ItemsAdderAssetResolver {
     ) {
         ResolutionResult result = new ResolutionResult();
 
-        if (parsed == null || contentsFolder == null
+        if (parsed == null
+                || contentsFolder == null
                 || !contentsFolder.isDirectory()) {
             return result;
         }
@@ -112,13 +123,16 @@ public final class ItemsAdderAssetResolver {
             );
         }
 
-        for (ItemsAdderConfigParser.AssetInfo asset : parsed.getAssets()) {
+        for (ItemsAdderConfigParser.AssetInfo asset
+                : parsed.getAssets()) {
+
             ResolvedAsset resolved = new ResolvedAsset(asset);
 
             for (Map.Entry<String, String> entry
                     : asset.getProperties().entrySet()) {
 
-                String key = entry.getKey().toLowerCase(Locale.ROOT);
+                String key = entry.getKey()
+                        .toLowerCase(Locale.ROOT);
 
                 if (!isAssetReference(key)) {
                     continue;
@@ -129,6 +143,7 @@ public final class ItemsAdderAssetResolver {
                 );
 
                 for (String reference : references) {
+
                     List<File> matches = findFiles(
                             reference,
                             asset.getNamespace(),
@@ -136,12 +151,11 @@ public final class ItemsAdderAssetResolver {
                             key
                     );
 
-                    String resultKey = entry.getKey() + ":" + reference;
+                    String resultKey =
+                            entry.getKey() + ":" + reference;
 
                     if (matches.isEmpty()) {
-                        resolved.missingReferences.add(
-                                resultKey
-                        );
+                        resolved.missingReferences.add(resultKey);
                     } else {
                         resolved.resolvedFiles.put(
                                 resultKey,
@@ -171,6 +185,7 @@ public final class ItemsAdderAssetResolver {
         FileIndex index = new FileIndex();
 
         try (Stream<Path> paths = Files.walk(rootPath)) {
+
             for (Path path : paths
                     .filter(Files::isRegularFile)
                     .toList()) {
@@ -197,10 +212,12 @@ public final class ItemsAdderAssetResolver {
     }
 
     private boolean isAssetReference(String key) {
+
         if (key.contains("material")
                 || key.contains("display_name")
                 || key.contains("permission")
-                || key.contains("custom_model_data")) {
+                || key.contains("custom_model_data")
+                || key.contains("model_id")) {
             return false;
         }
 
@@ -209,17 +226,22 @@ public final class ItemsAdderAssetResolver {
                 || key.endsWith(".texture")
                 || key.endsWith(".textures")
                 || key.contains("texture_path")
+                || key.contains("texture_file")
                 || key.equals("model")
                 || key.endsWith(".model")
                 || key.contains("model_path")
+                || key.contains("model_file")
                 || key.contains("item_model")
                 || key.equals("geometry")
+                || key.contains("geometry_path")
                 || key.contains("sound")
+                || key.contains("animation")
                 || key.endsWith("_file")
                 || key.endsWith("_path");
     }
 
     private List<String> splitReferences(String value) {
+
         if (value == null || value.isBlank()) {
             return List.of();
         }
@@ -228,19 +250,30 @@ public final class ItemsAdderAssetResolver {
 
         String cleaned = value.trim();
 
-        if (cleaned.startsWith("[") && cleaned.endsWith("]")) {
-            cleaned = cleaned.substring(1, cleaned.length() - 1);
-        }
+        cleaned = cleaned
+                .replace("[", "")
+                .replace("]", "")
+                .replace("(", "")
+                .replace(")", "")
+                .replace("\"", "")
+                .replace("'", "");
 
-        for (String part : cleaned.split(",")) {
+        String[] parts = cleaned.split("[,\\r\\n]+");
+
+        for (String part : parts) {
+
             String reference = part.trim()
-                    .replace("\\", "/")
-                    .replace("\"", "")
-                    .replace("'", "");
+                    .replace("\\", "/");
+
+            if (reference.startsWith("-")) {
+                reference = reference.substring(1).trim();
+            }
 
             if (reference.isBlank()
                     || reference.equalsIgnoreCase("none")
                     || reference.equalsIgnoreCase("null")
+                    || reference.equalsIgnoreCase("false")
+                    || reference.equalsIgnoreCase("true")
                     || reference.contains("{")
                     || reference.contains("}")) {
                 continue;
@@ -258,6 +291,7 @@ public final class ItemsAdderAssetResolver {
             FileIndex index,
             String property
     ) {
+
         String normalized = normalizeReference(reference);
 
         if (normalized.isBlank()) {
@@ -265,72 +299,52 @@ public final class ItemsAdderAssetResolver {
         }
 
         String referenceNamespace = null;
+
         int colon = normalized.indexOf(':');
 
         if (colon > 0) {
-            referenceNamespace = normalized.substring(0, colon);
+            referenceNamespace =
+                    normalized.substring(0, colon);
+
             normalized = normalized.substring(colon + 1);
         }
 
         String extension = expectedExtension(property);
 
-        List<String> candidates = new ArrayList<>();
+        List<String> candidates = buildCandidates(
+                normalized,
+                extension
+        );
 
-        addCandidate(candidates, normalized, extension);
-
-        if (!normalized.startsWith("textures/")) {
-            addCandidate(
-                    candidates,
-                    "textures/" + normalized,
-                    extension
-            );
-        }
-
-        if (!normalized.startsWith("resource/")) {
-            addCandidate(
-                    candidates,
-                    "resource/" + normalized,
-                    extension
-            );
-        }
-
-        if (extension.equals(".png")) {
-            addCandidate(
-                    candidates,
-                    "textures/items/" + normalized,
-                    extension
-            );
-            addCandidate(
-                    candidates,
-                    "textures/blocks/" + normalized,
-                    extension
-            );
-        }
-
+        // 1. Cari kecocokan path lengkap terlebih dahulu.
         for (String candidate : candidates) {
-            List<File> exactMatches = index.findExact(
+
+            List<File> matches = index.findExact(
                     candidate,
-                    referenceNamespace,
-                    namespace
+                    namespace,
+                    referenceNamespace
             );
 
-            if (!exactMatches.isEmpty()) {
-                return exactMatches;
+            if (!matches.isEmpty()) {
+                return matches;
             }
         }
 
+        // 2. Cari berdasarkan suffix path.
         for (String candidate : candidates) {
-            List<File> suffixMatches = index.findSuffix(
+
+            List<File> matches = index.findSuffix(
                     candidate,
-                    referenceNamespace,
-                    namespace
+                    namespace,
+                    referenceNamespace
             );
 
-            if (!suffixMatches.isEmpty()) {
-                return suffixMatches;
+            if (!matches.isEmpty()) {
+                return matches;
             }
         }
 
+        // 3. Pencarian basename hanya jika hasilnya tidak ambigu.
         String basename = normalized.substring(
                 normalized.lastIndexOf('/') + 1
         );
@@ -339,23 +353,79 @@ public final class ItemsAdderAssetResolver {
             basename += extension;
         }
 
-        List<File> namespaceMatches = index.findBasename(
+        List<File> basenameMatches = index.findBasename(
                 basename,
-                namespace
+                namespace,
+                referenceNamespace
         );
 
-        if (!namespaceMatches.isEmpty()) {
-            return namespaceMatches;
-        }
-
-        if (referenceNamespace != null) {
-            return index.findBasename(
-                    basename,
-                    referenceNamespace
-            );
+        if (basenameMatches.size() == 1) {
+            return basenameMatches;
         }
 
         return List.of();
+    }
+
+    private List<String> buildCandidates(
+            String reference,
+            String extension
+    ) {
+
+        List<String> candidates = new ArrayList<>();
+
+        addCandidate(candidates, reference, extension);
+
+        String path = normalizeReference(reference);
+
+        if (path.startsWith("textures/")) {
+            addCandidate(
+                    candidates,
+                    path.substring("textures/".length()),
+                    extension
+            );
+        }
+
+        if (path.startsWith("resourcepack/assets/")) {
+            addCandidate(
+                    candidates,
+                    path.substring("resourcepack/assets/".length()),
+                    extension
+            );
+        }
+
+        if (path.startsWith("assets/")) {
+            addCandidate(
+                    candidates,
+                    path.substring("assets/".length()),
+                    extension
+            );
+        }
+
+        if (!path.startsWith("textures/")) {
+            addCandidate(
+                    candidates,
+                    "textures/" + path,
+                    extension
+            );
+        }
+
+        if (!path.startsWith("resourcepack/assets/")) {
+            addCandidate(
+                    candidates,
+                    "resourcepack/assets/" + path,
+                    extension
+            );
+        }
+
+        if (!path.startsWith("assets/")) {
+            addCandidate(
+                    candidates,
+                    "assets/" + path,
+                    extension
+            );
+        }
+
+        return candidates;
     }
 
     private void addCandidate(
@@ -363,6 +433,7 @@ public final class ItemsAdderAssetResolver {
             String value,
             String extension
     ) {
+
         String normalized = normalizeReference(value);
 
         if (normalized.isBlank()) {
@@ -379,13 +450,15 @@ public final class ItemsAdderAssetResolver {
     }
 
     private String expectedExtension(String property) {
+
         if (property.contains("texture")) {
             return ".png";
         }
 
         if (property.contains("model")
                 || property.contains("geometry")
-                || property.contains("item_model")) {
+                || property.contains("item_model")
+                || property.contains("animation")) {
             return ".json";
         }
 
@@ -397,6 +470,7 @@ public final class ItemsAdderAssetResolver {
     }
 
     private String normalizeReference(String value) {
+
         String normalized = value.trim()
                 .replace('\\', '/')
                 .toLowerCase(Locale.ROOT);
@@ -413,6 +487,7 @@ public final class ItemsAdderAssetResolver {
     }
 
     private boolean hasExtension(String value) {
+
         int slash = value.lastIndexOf('/');
         int dot = value.lastIndexOf('.');
 
@@ -430,7 +505,11 @@ public final class ItemsAdderAssetResolver {
         private final Map<String, List<File>> byNamespaceBasename =
                 new LinkedHashMap<>();
 
-        void add(String relativePath, File file) {
+        void add(
+                String relativePath,
+                File file
+        ) {
+
             String path = normalize(relativePath);
 
             byPath.computeIfAbsent(
@@ -448,8 +527,25 @@ public final class ItemsAdderAssetResolver {
 
             String[] parts = path.split("/");
 
-            if (parts.length >= 2) {
-                String namespace = parts[0];
+            Set<String> namespaces = new LinkedHashSet<>();
+
+            if (parts.length > 0) {
+                namespaces.add(parts[0]);
+            }
+
+            // Dukungan struktur:
+            // namespace/resourcepack/assets/namespace/textures/...
+            // namespace/assets/namespace/textures/...
+            for (int i = 0; i < parts.length - 1; i++) {
+
+                if (parts[i].equals("assets")
+                        && i + 1 < parts.length - 1) {
+
+                    namespaces.add(parts[i + 1]);
+                }
+            }
+
+            for (String namespace : namespaces) {
 
                 String key = namespace + ":" + basename;
 
@@ -461,84 +557,138 @@ public final class ItemsAdderAssetResolver {
         }
 
         List<File> findExact(
-                String path,
-                String referenceNamespace,
-                String assetNamespace
+                String candidate,
+                String assetNamespace,
+                String referenceNamespace
         ) {
-            String normalized = normalize(path);
 
-            if (referenceNamespace != null) {
-                List<File> namespaced = byPath.get(
-                        referenceNamespace.toLowerCase(Locale.ROOT)
-                                + "/" + normalized
-                );
+            String normalized = normalize(candidate);
 
-                if (namespaced != null && !namespaced.isEmpty()) {
-                    return unique(namespaced);
-                }
-            }
+            String preferredNamespace =
+                    referenceNamespace != null
+                            ? referenceNamespace.toLowerCase(Locale.ROOT)
+                            : assetNamespace.toLowerCase(Locale.ROOT);
 
-            List<File> local = byPath.get(
-                    assetNamespace.toLowerCase(Locale.ROOT)
-                            + "/" + normalized
+            List<File> preferred = byPath.get(
+                    preferredNamespace + "/" + normalized
             );
 
-            if (local != null && !local.isEmpty()) {
-                return unique(local);
+            if (preferred != null && !preferred.isEmpty()) {
+                return unique(preferred);
             }
 
             List<File> exact = byPath.get(normalized);
 
-            return exact == null ? List.of() : unique(exact);
+            if (exact != null && !exact.isEmpty()) {
+                return unique(exact);
+            }
+
+            return List.of();
         }
 
         List<File> findSuffix(
                 String suffix,
-                String referenceNamespace,
-                String assetNamespace
+                String assetNamespace,
+                String referenceNamespace
         ) {
+
             String normalized = normalize(suffix);
 
-            List<File> matches = new ArrayList<>();
+            String preferredNamespace =
+                    referenceNamespace != null
+                            ? referenceNamespace.toLowerCase(Locale.ROOT)
+                            : assetNamespace.toLowerCase(Locale.ROOT);
 
-            String requiredNamespace = referenceNamespace != null
-                    ? referenceNamespace.toLowerCase(Locale.ROOT)
-                    : assetNamespace.toLowerCase(Locale.ROOT);
+            List<File> preferredMatches = new ArrayList<>();
 
-            for (Map.Entry<String, List<File>> entry : byPath.entrySet()) {
+            for (Map.Entry<String, List<File>> entry
+                    : byPath.entrySet()) {
+
                 String path = entry.getKey();
 
-                if (!path.startsWith(requiredNamespace + "/")) {
+                if (!belongsToNamespace(
+                        path,
+                        preferredNamespace
+                )) {
                     continue;
                 }
 
-                if (path.endsWith("/" + normalized)
-                        || path.equals(requiredNamespace + "/" + normalized)) {
-                    matches.addAll(entry.getValue());
+                if (path.equals(preferredNamespace + "/" + normalized)
+                        || path.endsWith("/" + normalized)) {
+
+                    preferredMatches.addAll(entry.getValue());
                 }
             }
 
-            if (matches.isEmpty() && referenceNamespace == null) {
-                for (Map.Entry<String, List<File>> entry : byPath.entrySet()) {
-                    if (entry.getKey().endsWith("/" + normalized)) {
-                        matches.addAll(entry.getValue());
-                    }
+            List<File> preferredUnique = unique(preferredMatches);
+
+            if (!preferredUnique.isEmpty()) {
+                return preferredUnique;
+            }
+
+            if (referenceNamespace != null) {
+                return List.of();
+            }
+
+            List<File> globalMatches = new ArrayList<>();
+
+            for (Map.Entry<String, List<File>> entry
+                    : byPath.entrySet()) {
+
+                String path = entry.getKey();
+
+                if (path.equals(normalized)
+                        || path.endsWith("/" + normalized)) {
+
+                    globalMatches.addAll(entry.getValue());
                 }
             }
 
-            return unique(matches);
+            return unique(globalMatches);
         }
 
         List<File> findBasename(
                 String basename,
-                String namespace
+                String assetNamespace,
+                String referenceNamespace
         ) {
-            String key = namespace.toLowerCase(Locale.ROOT)
-                    + ":" + basename.toLowerCase(Locale.ROOT);
+
+            String namespace = referenceNamespace != null
+                    ? referenceNamespace.toLowerCase(Locale.ROOT)
+                    : assetNamespace.toLowerCase(Locale.ROOT);
+
+            String key = namespace + ":"
+                    + basename.toLowerCase(Locale.ROOT);
 
             List<File> matches = byNamespaceBasename.get(key);
 
-            return matches == null ? List.of() : unique(matches);
+            if (matches != null && !matches.isEmpty()) {
+                return unique(matches);
+            }
+
+            if (referenceNamespace != null) {
+                return List.of();
+            }
+
+            List<File> global = byBasename.get(
+                    basename.toLowerCase(Locale.ROOT)
+            );
+
+            return global == null ? List.of() : unique(global);
+        }
+
+        private boolean belongsToNamespace(
+                String path,
+                String namespace
+        ) {
+
+            if (path.startsWith(namespace + "/")) {
+                return true;
+            }
+
+            return path.contains(
+                    "/assets/" + namespace + "/"
+            );
         }
 
         private List<File> unique(List<File> files) {
