@@ -24,6 +24,9 @@ public final class ItemsAdderMappingExporter {
             .disableHtmlEscaping()
             .create();
 
+    private final ItemsAdderMappingValidator validator =
+            new ItemsAdderMappingValidator();
+
     public ExportResult export(
             ItemsAdderCustomMappingGenerator.MappingResult mappingResult,
             File geyserDataDirectory
@@ -42,6 +45,16 @@ public final class ItemsAdderMappingExporter {
         if (!mappingResult.hasMappings()) {
             throw new IOException(
                     "No generated mappings available for export."
+            );
+        }
+
+        ItemsAdderMappingValidator.ValidationResult validation =
+                validator.validate(mappingResult);
+
+        if (!validation.isSuccessful()) {
+            throw new IOException(
+                    "Mapping validation failed: "
+                            + String.join("; ", validation.errors())
             );
         }
 
