@@ -65,7 +65,138 @@ public final class ItemsAdderConfigParser {
         }
 
         public String getProperty(String key) {
-            return properties.get(key);
+            if (key == null) {
+                return null;
+            }
+
+            String direct = properties.get(key);
+
+            if (direct != null) {
+                return direct;
+            }
+
+            for (Map.Entry<String, String> entry : properties.entrySet()) {
+                if (entry.getKey().equalsIgnoreCase(key)) {
+                    return entry.getValue();
+                }
+            }
+
+            return null;
+        }
+
+        public String getMaterial() {
+            return firstProperty(
+                    "resource.material",
+                    "material",
+                    "item.material",
+                    "specific_properties.material"
+            );
+        }
+
+        public String getDisplayName() {
+            return firstProperty(
+                    "display_name",
+                    "name",
+                    "item.display_name"
+            );
+        }
+
+        public String getPermission() {
+            return firstProperty(
+                    "permission",
+                    "permissions",
+                    "behaviours.permission"
+            );
+        }
+
+        public String getModelPath() {
+            return firstProperty(
+                    "resource.model_path",
+                    "resource.model",
+                    "model_path",
+                    "model",
+                    "geometry"
+            );
+        }
+
+        public String getTexturePath() {
+            return firstProperty(
+                    "resource.texture",
+                    "resource.textures",
+                    "textures",
+                    "texture"
+            );
+        }
+
+        public String getCustomModelDataValue() {
+            return firstProperty(
+                    "custom_model_data",
+                    "resource.custom_model_data",
+                    "model_id",
+                    "resource.model_id",
+                    "custom_model_data.value"
+            );
+        }
+
+        public Integer getCustomModelData() {
+            String value = getCustomModelDataValue();
+
+            if (value == null || value.isBlank()) {
+                return null;
+            }
+
+            try {
+                return Integer.parseInt(value.trim());
+            } catch (NumberFormatException ignored) {
+                return null;
+            }
+        }
+
+        public boolean hasCustomModelData() {
+            return getCustomModelData() != null;
+        }
+
+        public String getJavaIdentifier() {
+            String material = getMaterial();
+
+            if (material == null || material.isBlank()) {
+                return null;
+            }
+
+            String normalized = material
+                    .trim()
+                    .toLowerCase(Locale.ROOT);
+
+            if (normalized.contains(":")) {
+                return normalized;
+            }
+
+            return "minecraft:" + normalized;
+        }
+
+        public String getExplicitBedrockIdentifier() {
+            return firstProperty(
+                    "bedrock_identifier",
+                    "bedrock.identifier",
+                    "geyser.identifier",
+                    "geyser.bedrock_identifier"
+            );
+        }
+
+        public String getNamespacedId() {
+            return namespace + ":" + id;
+        }
+
+        private String firstProperty(String... keys) {
+            for (String key : keys) {
+                String value = getProperty(key);
+
+                if (value != null && !value.isBlank()) {
+                    return value;
+                }
+            }
+
+            return null;
         }
     }
 
@@ -87,9 +218,45 @@ public final class ItemsAdderConfigParser {
             return filesRead;
         }
 
+        public int getTotalAssets() {
+            return assets.size();
+        }
+
         public int count(AssetType type) {
             return (int) assets.stream()
                     .filter(asset -> asset.getType() == type)
+                    .count();
+        }
+
+        public int countCustomModelData() {
+            return (int) assets.stream()
+                    .filter(AssetInfo::hasCustomModelData)
+                    .count();
+        }
+
+        public int countWithMaterial() {
+            return (int) assets.stream()
+                    .filter(asset -> asset.getMaterial() != null)
+                    .count();
+        }
+
+        public int countWithTexture() {
+            return (int) assets.stream()
+                    .filter(asset -> asset.getTexturePath() != null)
+                    .count();
+        }
+
+        public int countWithModel() {
+            return (int) assets.stream()
+                    .filter(asset -> asset.getModelPath() != null)
+                    .count();
+        }
+
+        public int countWithBedrockIdentifier() {
+            return (int) assets.stream()
+                    .filter(asset ->
+                            asset.getExplicitBedrockIdentifier() != null
+                    )
                     .count();
         }
 
@@ -104,14 +271,18 @@ public final class ItemsAdderConfigParser {
         if (contentsFolder == null
                 || !contentsFolder.exists()
                 || !contentsFolder.isDirectory()) {
-            result.errors.add("Invalid ItemsAdder contents directory.");
+            result.errors.add(
+                    "Invalid ItemsAdder contents directory."
+            );
             return result;
         }
 
         File[] namespaces = contentsFolder.listFiles(File::isDirectory);
 
         if (namespaces == null) {
-            result.errors.add("Cannot read ItemsAdder namespaces.");
+            result.errors.add(
+                    "Cannot read ItemsAdder namespaces."
+            );
             return result;
         }
 
@@ -154,7 +325,8 @@ public final class ItemsAdderConfigParser {
 
             String name = file.getName().toLowerCase(Locale.ROOT);
 
-            if (!name.endsWith(".yml") && !name.endsWith(".yaml")) {
+            if (!name.endsWith(".yml")
+                    && !name.endsWith(".yaml")) {
                 continue;
             }
 
@@ -228,9 +400,13 @@ public final class ItemsAdderConfigParser {
     private AssetType identifyType(String key) {
         return switch (key.toLowerCase(Locale.ROOT)) {
             case "items", "custom_items" -> AssetType.ITEM;
+
             case "blocks", "custom_blocks" -> AssetType.BLOCK;
+
             case "furniture" -> AssetType.FURNITURE;
+
             case "entities", "custom_entities" -> AssetType.ENTITY;
+
             default -> AssetType.OTHER;
         };
     }
@@ -257,14 +433,46 @@ public final class ItemsAdderConfigParser {
             }
 
             if (value instanceof List<?> list) {
-                properties.put(path, String.join(
-                        ", ",
-                        list.stream()
-                                .map(String::valueOf)
-                                .toList()
-                ));
+                List<String> values = new ArrayList<>();
+
+                for (Object element : list) {
+                    if (element == null) {
+                        continue;
+                    }
+
+                    if (element instanceof Map<?, ?> map) {
+                        values.add(map.toString());
+                    } else {
+                        values.add(String.valueOf(element));
+                    }
+                }
+
+                properties.put(
+                        path,
+                        String.join(", ", values)
+                );
+
+            } else if (value instanceof Map<?, ?> map) {
+                for (Map.Entry<?, ?> entry : map.entrySet()) {
+                    if (entry.getKey() == null
+                            || entry.getValue() == null) {
+                        continue;
+                    }
+
+                    String nestedPath = path + "."
+                            + entry.getKey();
+
+                    properties.put(
+                            nestedPath,
+                            String.valueOf(entry.getValue())
+                    );
+                }
+
             } else {
-                properties.put(path, String.valueOf(value));
+                properties.put(
+                        path,
+                        String.valueOf(value)
+                );
             }
         }
     }
