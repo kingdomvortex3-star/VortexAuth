@@ -3,10 +3,15 @@ package id.vortexauth;
 
 import id.vortexauth.auth.AccountManager;
 import id.vortexauth.auth.AuthenticationManager;
+import id.vortexauth.auth.AuthResult;
 import id.vortexauth.auth.LoginAttemptManager;
 import id.vortexauth.auth.PasswordManager;
 import id.vortexauth.auth.RegistrationManager;
 import id.vortexauth.session.SessionManager;
+
+import id.vortexauth.bedrock.BedrockFormListener;
+import id.vortexauth.bedrock.BedrockFormManager;
+import id.vortexauth.bedrock.FloodgateManager;
 
 import id.vortexauth.commands.AuthAdminCommand;
 import id.vortexauth.commands.AuthCommand;
@@ -28,8 +33,10 @@ import id.vortexauth.security.AntiVpnManager;
 import id.vortexauth.security.DiscordWebhookManager;
 import id.vortexauth.security.IpAddressManager;
 
+import org.bukkit.ChatColor;
 import org.bukkit.command.CommandExecutor;
 import org.bukkit.command.PluginCommand;
+import org.bukkit.entity.Player;
 import org.bukkit.plugin.java.JavaPlugin;
 
 import java.io.IOException;
@@ -52,10 +59,12 @@ public final class VortexAuth extends JavaPlugin {
     private AntiVpnManager antiVpnManager;
     private DiscordWebhookManager discordWebhookManager;
 
+    private FloodgateManager floodgateManager;
+    private BedrockFormManager bedrockFormManager;
+
     @Override
     public void onEnable() {
         instance = this;
-
         saveDefaultConfig();
 
         getLogger().info("================================");
@@ -66,6 +75,7 @@ public final class VortexAuth extends JavaPlugin {
             initializeDatabase();
             initializeAuthentication();
             initializeSecurity();
+            initializeBedrock();
             registerCommands();
             registerListeners();
 
@@ -77,14 +87,12 @@ public final class VortexAuth extends JavaPlugin {
             exception.printStackTrace();
 
             shutdownManagers();
-
             getServer().getPluginManager().disablePlugin(this);
         }
     }
 
     private void initializeDatabase() throws SQLException {
         getLogger().info("Initializing database...");
-
         databaseManager = new DatabaseManager(this);
         databaseManager.initialize();
     }
@@ -93,7 +101,6 @@ public final class VortexAuth extends JavaPlugin {
         getLogger().info("Initializing authentication engine...");
 
         passwordManager = new PasswordManager(this);
-
         accountManager = new AccountManager(
                 this,
                 databaseManager,
@@ -125,6 +132,75 @@ public final class VortexAuth extends JavaPlugin {
         antiBotManager = new AntiBotManager(this);
         antiVpnManager = new AntiVpnManager(this);
         discordWebhookManager = new DiscordWebhookManager(this);
+    }
+
+    private void initializeBedrock() {
+        getLogger().info("Initializing Bedrock integration...");
+
+        floodgateManager = new FloodgateManager(
+                this,
+                accountManager
+        );
+
+        if (!floodgateManager.isAvailable()) {
+            getLogger().warning(
+                    "Floodgate not found. Bedrock authentication is unavailable."
+            );
+            return;
+        }
+
+        bedrockFormManager = new BedrockFormManager(
+                this,
+                floodgateManager,
+                new BedrockFormManager.AuthFormHandler() {
+
+                    @Override
+                    public void onLogin(Player player, String password) {
+                        if (player == null || !player.isOnline()) {
+                            return;
+                        }
+
+                        String ipHash =
+                                ipAddressManager.getPlayerIpHash(player);
+
+                        AuthResult result = authenticationManager.login(
+                                player.getUniqueId(),
+                                password,
+                                ipHash
+                        );
+
+                        if (result == AuthResult.SUCCESS) {
+                            player.sendMessage(color(
+                                    "&aLogin berhasil! Selamat datang."
+                            ));
+                        } else {
+                            player.sendMessage(color(
+                                    "&cLogin gagal. Periksa password dan coba lagi."
+                            ));
+                        }
+                    }
+
+                    @Override
+                    public void onRegister(
+                            Player player,
+                            String password,
+                            String confirmation
+                    ) {
+                        if (player == null || !player.isOnline()) {
+                            return;
+                        }
+
+                        player.sendMessage(color(
+                                "&cRegistrasi Bedrock belum tersedia."
+                        ));
+                        player.sendMessage(color(
+                                "&7Silakan hubungi admin untuk menautkan akun."
+                        ));
+                    }
+                }
+        );
+
+        getLogger().info("Floodgate integration initialized.");
     }
 
     private void registerCommands() {
@@ -231,6 +307,26 @@ public final class VortexAuth extends JavaPlugin {
                 ),
                 this
         );
+
+        if (floodgateManager != null
+                && floodgateManager.isAvailable()
+                && bedrockFormManager != null) {
+
+            getServer().getPluginManager().registerEvents(
+                    new BedrockFormListener(
+                            this,
+                            accountManager,
+                            authenticationManager,
+                            floodgateManager,
+                            bedrockFormManager
+                    ),
+                    this
+            );
+        }
+    }
+
+    private String color(String message) {
+        return ChatColor.translateAlternateColorCodes('&', message);
     }
 
     private void shutdownManagers() {
@@ -246,11 +342,8 @@ public final class VortexAuth extends JavaPlugin {
     @Override
     public void onDisable() {
         getLogger().info("Shutting down VortexAuth...");
-
         shutdownManagers();
-
         instance = null;
-
         getLogger().info("VortexAuth disabled.");
     }
 
@@ -300,5 +393,13 @@ public final class VortexAuth extends JavaPlugin {
 
     public DiscordWebhookManager getDiscordWebhookManager() {
         return discordWebhookManager;
+    }
+
+    public FloodgateManager getFloodgateManager() {
+        return floodgateManager;
+    }
+
+    public BedrockFormManager getBedrockFormManager() {
+        return bedrockFormManager;
     }
 }
