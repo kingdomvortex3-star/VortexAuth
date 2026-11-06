@@ -45,20 +45,17 @@ public final class BedrockAuthListener implements Listener {
     public void onBedrockJoin(PlayerJoinEvent event) {
         Player player = event.getPlayer();
 
-        if (!plugin.getConfig().getBoolean(
-                "bedrock.enabled",
-                true
-        )) {
+        if (!plugin.getConfig().getBoolean("bedrock.enabled", true)) {
             return;
         }
 
-        if (!floodgateManager.isBedrock(player)) {
+        if (!floodgateManager.isAvailable()
+                || !floodgateManager.isBedrock(player)) {
             return;
         }
 
         if (!plugin.getConfig().getBoolean(
-                "bedrock.auto-login.enabled",
-                true
+                "bedrock.auto-login.enabled", true
         )) {
             player.sendMessage(color(
                     "&eBedrock terdeteksi. Silakan ikuti proses autentikasi."
@@ -103,11 +100,11 @@ public final class BedrockAuthListener implements Listener {
                 return;
             }
 
-            String ipHash = ipAddressManager.getPlayerIpHash(player);
+            String ipHash =
+                    ipAddressManager.getPlayerIpHash(player);
 
             if (authenticationManager.isAuthenticated(
-                    player.getUniqueId(),
-                    ipHash
+                    player.getUniqueId(), ipHash
             )) {
                 return;
             }
@@ -118,15 +115,14 @@ public final class BedrockAuthListener implements Listener {
             );
 
             if (authenticationManager.isAuthenticated(
-                    player.getUniqueId(),
-                    ipHash
+                    player.getUniqueId(), ipHash
             )) {
                 player.sendMessage(color(
                         "&aAutentikasi Bedrock berhasil!"
                 ));
             } else {
                 player.sendMessage(color(
-                        "&cAutentikasi Bedrock gagal. Silakan hubungi administrator."
+                        "&cAutentikasi Bedrock gagal. Hubungi administrator."
                 ));
             }
 
