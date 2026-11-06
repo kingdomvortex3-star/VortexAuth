@@ -7,13 +7,16 @@ import id.vortexauth.VortexAuth;
 
 import java.io.File;
 import java.sql.Connection;
+import java.sql.DatabaseMetaData;
 import java.sql.SQLException;
 import java.sql.Statement;
+import java.util.Locale;
 
 public final class DatabaseManager {
 
     private final VortexAuth plugin;
     private HikariDataSource dataSource;
+    private boolean mysql;
 
     public DatabaseManager(VortexAuth plugin) {
         this.plugin = plugin;
@@ -22,11 +25,13 @@ public final class DatabaseManager {
     public void initialize() throws SQLException {
         String type = plugin.getConfig()
                 .getString("database.type", "SQLITE")
-                .toUpperCase();
+                .toUpperCase(Locale.ROOT);
+
+        mysql = type.equals("MYSQL");
 
         HikariConfig config = new HikariConfig();
 
-        if (type.equals("MYSQL")) {
+        if (mysql) {
             configureMySQL(config);
         } else {
             configureSQLite(config);
@@ -41,25 +46,32 @@ public final class DatabaseManager {
         int connectionTimeout = plugin.getConfig()
                 .getInt("database.pool.connection-timeout", 30000);
 
-        config.setMaximumPoolSize(Math.max(1, maximumPool));
-        config.setMinimumIdle(Math.max(0,
-                Math.min(minimumIdle, maximumPool)));
+        if (mysql) {
+            config.setMaximumPoolSize(Math.max(1, maximumPool));
+            config.setMinimumIdle(
+                    Math.max(0, Math.min(minimumIdle, maximumPool))
+            );
+        } else {
+            config.setMaximumPoolSize(1);
+            config.setMinimumIdle(1);
+        }
 
-        config.setConnectionTimeout(
-                Math.max(250, connectionTimeout)
-        );
-
+        config.setConnectionTimeout(Math.max(250, connectionTimeout));
         config.setPoolName("VortexAuth-Database");
-
         config.setConnectionTestQuery("SELECT 1");
 
         dataSource = new HikariDataSource(config);
 
-        createTables();
-
-        plugin.getLogger().info(
-                "Database initialized successfully!"
-        );
+        try {
+            createTables();
+            plugin.getLogger().info(
+                    "Database initialized successfully! Type: "
+                            + (mysql ? "MySQL" : "SQLite")
+            );
+        } catch (SQLException exception) {
+            close();
+            throw exception;
+        }
     }
 
     private void configureSQLite(HikariConfig config) {
@@ -73,18 +85,17 @@ public final class DatabaseManager {
 
         File parent = databaseFile.getParentFile();
 
-        if (parent != null && !parent.exists()) {
-            parent.mkdirs();
+        if (parent != null && !parent.exists()
+                && !parent.mkdirs()) {
+            throw new IllegalStateException(
+                    "Cannot create database directory!"
+            );
         }
 
         config.setDriverClassName("org.sqlite.JDBC");
-
         config.setJdbcUrl(
                 "jdbc:sqlite:" + databaseFile.getAbsolutePath()
         );
-
-        config.setMaximumPoolSize(1);
-        config.setMinimumIdle(1);
     }
 
     private void configureMySQL(HikariConfig config) {
@@ -107,7 +118,6 @@ public final class DatabaseManager {
                 .getBoolean("database.mysql.ssl", false);
 
         config.setDriverClassName("com.mysql.cj.jdbc.Driver");
-
         config.setJdbcUrl(
                 "jdbc:mysql://" + host + ":" + port + "/" + database
                         + "?useSSL=" + ssl
@@ -144,7 +154,7 @@ public final class DatabaseManager {
                 )
                 """;
 
-        String security = """
+        String securityMySQL = """
                 CREATE TABLE IF NOT EXISTS vortexauth_security (
                     id BIGINT NOT NULL AUTO_INCREMENT PRIMARY KEY,
                     player_uuid VARCHAR(36),
@@ -164,30 +174,60 @@ public final class DatabaseManager {
                 )
                 """;
 
-        String type = plugin.getConfig()
-                .getString("database.type", "SQLITE");
-
         try (Connection connection = getConnection();
              Statement statement = connection.createStatement()) {
 
             statement.execute(accounts);
             statement.execute(sessions);
+            statement.execute(mysql ? securityMySQL : securitySQLite);
 
-            statement.execute(
-                    type.equalsIgnoreCase("MYSQL")
-                            ? security
-                            : securitySQLite
+            createIndex(
+                    connection,
+                    "idx_vortexauth_username",
+                    "vortexauth_accounts",
+                    "username"
             );
 
-            statement.execute(
-                    "CREATE INDEX IF NOT EXISTS idx_vortexauth_username "
-                            + "ON vortexauth_accounts(username)"
+            createIndex(
+                    connection,
+                    "idx_vortexauth_xuid",
+                    "vortexauth_accounts",
+                    "xuid"
             );
+        }
+    }
 
-            statement.execute(
-                    "CREATE INDEX IF NOT EXISTS idx_vortexauth_xuid "
-                            + "ON vortexauth_accounts(xuid)"
-            );
+    private void createIndex(
+            Connection connection,
+            String indexName,
+            String tableName,
+            String columnName
+    ) throws SQLException {
+
+        DatabaseMetaData metadata = connection.getMetaData();
+
+        try (var result = metadata.getIndexInfo(
+                connection.getCatalog(),
+                null,
+                tableName,
+                false,
+                false
+        )) {
+            while (result.next()) {
+                String existing = result.getString("INDEX_NAME");
+
+                if (indexName.equalsIgnoreCase(existing)) {
+                    return;
+                }
+            }
+        }
+
+        String sql = "CREATE INDEX " + indexName
+                + " ON " + tableName
+                + "(" + columnName + ")";
+
+        try (Statement statement = connection.createStatement()) {
+            statement.execute(sql);
         }
     }
 
@@ -208,6 +248,7 @@ public final class DatabaseManager {
     public void close() {
         if (dataSource != null && !dataSource.isClosed()) {
             dataSource.close();
+
             plugin.getLogger().info(
                     "Database connection pool closed."
             );
