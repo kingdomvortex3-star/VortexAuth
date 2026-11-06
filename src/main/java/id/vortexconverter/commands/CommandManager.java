@@ -2,6 +2,7 @@
 package id.vortexconverter.commands;
 
 import id.vortexconverter.VortexConverter;
+import id.vortexconverter.converter.BlockbenchPackPipeline;
 import id.vortexconverter.scanner.ItemsAdderScanner;
 import id.vortexconverter.scanner.ItemsAdderConfigParser;
 import id.vortexconverter.scanner.ItemsAdderAssetResolver;
@@ -17,8 +18,10 @@ import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
 
 import java.io.File;
+import java.io.IOException;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Locale;
 
 public final class CommandManager implements CommandExecutor, TabCompleter {
 
@@ -26,12 +29,14 @@ public final class CommandManager implements CommandExecutor, TabCompleter {
     private final ItemsAdderScanner scanner;
     private final ItemsAdderConfigParser parser;
     private final ItemsAdderAssetResolver resolver;
+    private final BlockbenchPackPipeline blockbenchPipeline;
 
     public CommandManager(VortexConverter plugin) {
         this.plugin = plugin;
         this.scanner = new ItemsAdderScanner(plugin);
         this.parser = new ItemsAdderConfigParser();
         this.resolver = new ItemsAdderAssetResolver();
+        this.blockbenchPipeline = new BlockbenchPackPipeline();
     }
 
     @Override
@@ -51,10 +56,13 @@ public final class CommandManager implements CommandExecutor, TabCompleter {
             return true;
         }
 
-        switch (args[0].toLowerCase()) {
+        switch (args[0].toLowerCase(Locale.ROOT)) {
             case "help" -> sendHelp(sender);
+
             case "scan" -> scanPlugins(sender);
+
             case "itemsadder" -> scanItemsAdder(sender);
+
             case "report" -> sendReport(sender);
 
             case "reload" -> {
@@ -62,9 +70,7 @@ public final class CommandManager implements CommandExecutor, TabCompleter {
                 sender.sendMessage("§aConfiguration reloaded.");
             }
 
-            case "convert" -> sender.sendMessage(
-                    "§eConversion engine is not implemented yet."
-            );
+            case "convert" -> convertBlockbench(sender, args);
 
             default -> sender.sendMessage(
                     "§cUnknown command. Use /vortexconvert help."
@@ -82,7 +88,8 @@ public final class CommandManager implements CommandExecutor, TabCompleter {
         sender.sendMessage("§b/vortexconvert itemsadder §7- Scan ItemsAdder");
         sender.sendMessage("§b/vortexconvert report §7- Server report");
         sender.sendMessage("§b/vortexconvert reload §7- Reload config");
-        sender.sendMessage("§b/vortexconvert convert §7- Convert assets");
+        sender.sendMessage("§b/vortexconvert convert <file> [name] [geometry]");
+        sender.sendMessage("§7Convert a Blockbench .bbmodel file");
         sender.sendMessage("§8--------------------------------");
     }
 
@@ -223,6 +230,118 @@ public final class CommandManager implements CommandExecutor, TabCompleter {
         );
     }
 
+    private void convertBlockbench(
+            CommandSender sender,
+            String[] args
+    ) {
+        if (args.length < 2 || args.length > 4) {
+            sender.sendMessage("§cUsage:");
+            sender.sendMessage(
+                    "§e/vortexconvert convert <file.bbmodel> [pack-name] [geometry-id]"
+            );
+            return;
+        }
+
+        String fileName = args[1];
+
+        File workspace = plugin.getWorkspaceFolder();
+        File inputFile = new File(fileName);
+
+        if (!inputFile.isAbsolute()) {
+            inputFile = new File(workspace, fileName);
+        }
+
+        if (!inputFile.exists() || !inputFile.isFile()) {
+            sender.sendMessage("§cBBModel file not found:");
+            sender.sendMessage("§7" + inputFile.getPath());
+            sender.sendMessage("§ePlace the file inside:");
+            sender.sendMessage("§f" + workspace.getPath());
+            return;
+        }
+
+        if (!inputFile.getName().toLowerCase(Locale.ROOT).endsWith(".bbmodel")) {
+            sender.sendMessage("§cOnly .bbmodel files are supported.");
+            return;
+        }
+
+        String defaultName = inputFile.getName();
+        defaultName = defaultName.substring(
+                0,
+                defaultName.length() - ".bbmodel".length()
+        );
+
+        String packName = args.length >= 3
+                ? args[2]
+                : defaultName;
+
+        String geometryIdentifier = args.length >= 4
+                ? args[3]
+                : "geometry.vortex." + sanitizeIdentifier(defaultName);
+
+        sender.sendMessage("§8--------------------------------");
+        sender.sendMessage("§b§lVortexConverter");
+        sender.sendMessage("§7Blockbench conversion started...");
+        sender.sendMessage("§7Input: §f" + inputFile.getName());
+        sender.sendMessage("§7Pack: §f" + packName);
+        sender.sendMessage("§7Geometry: §f" + geometryIdentifier);
+        sender.sendMessage("§8--------------------------------");
+
+        try {
+            BlockbenchPackPipeline.PipelineResult result =
+                    blockbenchPipeline.convert(
+                            inputFile,
+                            plugin.getOutputFolder(),
+                            packName,
+                            geometryIdentifier
+                    );
+
+            sender.sendMessage("§8--------------------------------");
+            sender.sendMessage("§a§lCONVERSION COMPLETED");
+            sender.sendMessage("§7Bones: §f" + result.boneCount());
+            sender.sendMessage("§7Animations: §f" + result.animationCount());
+            sender.sendMessage("§7UV cubes: §f" + result.uvCubeCount());
+            sender.sendMessage("§7Textures copied: §f"
+                    + result.copiedTextureCount());
+            sender.sendMessage("§7Missing textures: §f"
+                    + result.missingTextureCount());
+            sender.sendMessage("§8--------------------------------");
+            sender.sendMessage("§aMCpack created:");
+            sender.sendMessage("§f" + result.mcpackFile().getPath());
+            sender.sendMessage("§8--------------------------------");
+
+        } catch (IOException exception) {
+            sender.sendMessage("§cConversion failed:");
+            sender.sendMessage("§7" + exception.getMessage());
+
+            plugin.getLogger().severe(
+                    "Blockbench conversion failed: "
+                            + exception.getMessage()
+            );
+
+        } catch (Exception exception) {
+            sender.sendMessage("§cAn unexpected conversion error occurred.");
+            sender.sendMessage("§7Check the server console for details.");
+
+            plugin.getLogger().severe(
+                    "Unexpected Blockbench conversion error:"
+            );
+
+            exception.printStackTrace();
+        }
+    }
+
+    private String sanitizeIdentifier(String input) {
+        String sanitized = input
+                .toLowerCase(Locale.ROOT)
+                .replaceAll("[^a-z0-9_.-]", "_");
+
+        if (sanitized.isBlank()) {
+            return "model";
+        }
+
+        return sanitized;
+    }
+
     private void sendReport(CommandSender sender) {
         sender.sendMessage("§b§lVortexConverter Server Report");
         sender.sendMessage("§8--------------------------------");
@@ -251,7 +370,7 @@ public final class CommandManager implements CommandExecutor, TabCompleter {
         }
 
         if (args.length == 1) {
-            String input = args[0].toLowerCase();
+            String input = args[0].toLowerCase(Locale.ROOT);
             List<String> suggestions = new ArrayList<>();
 
             for (String option : List.of(
@@ -264,6 +383,33 @@ public final class CommandManager implements CommandExecutor, TabCompleter {
             )) {
                 if (option.startsWith(input)) {
                     suggestions.add(option);
+                }
+            }
+
+            return suggestions;
+        }
+
+        if (args.length == 2
+                && args[0].equalsIgnoreCase("convert")) {
+
+            File workspace = plugin.getWorkspaceFolder();
+            File[] files = workspace.listFiles();
+
+            if (files == null) {
+                return List.of();
+            }
+
+            String input = args[1].toLowerCase(Locale.ROOT);
+            List<String> suggestions = new ArrayList<>();
+
+            for (File file : files) {
+                if (file.isFile()
+                        && file.getName().toLowerCase(Locale.ROOT)
+                        .endsWith(".bbmodel")
+                        && file.getName().toLowerCase(Locale.ROOT)
+                        .startsWith(input)) {
+
+                    suggestions.add(file.getName());
                 }
             }
 
