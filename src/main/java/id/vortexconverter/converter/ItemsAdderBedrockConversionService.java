@@ -2,6 +2,8 @@
 package id.vortexconverter.converter;
 
 import id.vortexconverter.mappings.ItemsAdderCustomMappingGenerator;
+import id.vortexconverter.mappings.ItemsAdderMappingExporter;
+import id.vortexconverter.mappings.ItemsAdderMappingValidator;
 import id.vortexconverter.scanner.ItemsAdderConfigParser;
 
 import java.io.File;
@@ -13,43 +15,42 @@ public class ItemsAdderBedrockConversionService {
 
     private final ItemsAdderConfigParser parser;
     private final ItemsAdderCustomMappingGenerator mappingGenerator;
+    private final ItemsAdderMappingValidator validator;
+    private final ItemsAdderMappingExporter exporter;
     private final ItemsAdderBedrockResourcePackBuilder packBuilder;
 
     public ItemsAdderBedrockConversionService() {
         this.parser = new ItemsAdderConfigParser();
         this.mappingGenerator = new ItemsAdderCustomMappingGenerator();
+        this.validator = new ItemsAdderMappingValidator();
+        this.exporter = new ItemsAdderMappingExporter();
         this.packBuilder = new ItemsAdderBedrockResourcePackBuilder();
     }
 
     public ConversionResult convert(
             File itemsAdderContents,
-            File outputDirectory
+            File geyserDataDirectory
     ) throws IOException {
 
         if (itemsAdderContents == null
-                || !itemsAdderContents.exists()
                 || !itemsAdderContents.isDirectory()) {
             throw new IOException(
                     "Folder ItemsAdder contents tidak ditemukan."
             );
         }
 
-        if (outputDirectory == null) {
+        if (geyserDataDirectory == null
+                || (!geyserDataDirectory.isDirectory()
+                && !geyserDataDirectory.mkdirs())) {
             throw new IOException(
-                    "Folder output tidak ditentukan."
+                    "Folder data Geyser tidak dapat diakses."
             );
         }
 
         ItemsAdderConfigParser.ParseResult parseResult =
                 parser.parse(itemsAdderContents);
 
-        if (parseResult == null) {
-            throw new IOException(
-                    "ItemsAdder parser tidak menghasilkan data."
-            );
-        }
-
-        if (parseResult.getFilesRead() == 0) {
+        if (parseResult == null || parseResult.getFilesRead() == 0) {
             throw new IOException(
                     "Tidak ada konfigurasi ItemsAdder yang berhasil dibaca."
             );
@@ -60,31 +61,67 @@ public class ItemsAdderBedrockConversionService {
 
         if (mappingResult == null || !mappingResult.hasMappings()) {
             throw new IOException(
-                    "Tidak ada mapping custom item yang dapat diproses."
+                    "Tidak ada custom item mapping yang dapat dibuat."
             );
         }
 
+        ItemsAdderMappingValidator.ValidationResult validation =
+                validator.validate(mappingResult);
+
+        if (!validation.isSuccessful()) {
+            throw new IOException(
+                    "Mapping tidak valid: "
+                            + String.join(" | ", validation.errors())
+            );
+        }
+
+        // Export custom mappings directly to Geyser.
+        ItemsAdderMappingExporter.ExportResult exportResult =
+                exporter.export(
+                        mappingResult,
+                        geyserDataDirectory
+                );
+
+        if (exportResult == null || !exportResult.isSuccessful()) {
+            throw new IOException(
+                    "Gagal mengekspor custom mappings ke Geyser."
+            );
+        }
+
+        File mappingFile = exportResult.mappingFile();
+
+        if (mappingFile == null || !mappingFile.isFile()) {
+            throw new IOException(
+                    "File custom mappings tidak ditemukan setelah export."
+            );
+        }
+
+        // Build the Bedrock resource pack inside Geyser/packs.
         ItemsAdderBedrockResourcePackBuilder.PackResult packResult =
                 packBuilder.build(
                         itemsAdderContents,
-                        outputDirectory,
+                        geyserDataDirectory,
                         parseResult,
                         mappingResult
                 );
 
         if (packResult == null || !packResult.isSuccessful()) {
             throw new IOException(
-                    "Resource pack Bedrock gagal dibuat."
+                    "Resource pack gagal dibuat. Mapping sudah diekspor ke: "
+                            + mappingFile.getPath()
             );
         }
 
         List<String> warnings = new ArrayList<>(
-                packResult.warnings()
+                mappingResult.warnings()
         );
+
+        warnings.addAll(validation.warnings());
+        warnings.addAll(packResult.warnings());
 
         if (parseResult.hasErrors()) {
             warnings.add(
-                    "Parser menemukan kesalahan pada sebagian konfigurasi."
+                    "Sebagian konfigurasi ItemsAdder mengalami kesalahan."
             );
         }
 
@@ -97,7 +134,8 @@ public class ItemsAdderBedrockConversionService {
                 packResult.skippedItems(),
                 warnings,
                 packResult.skippedDetails(),
-                packResult.packFile()
+                packResult.packFile(),
+                mappingFile
         );
     }
 
@@ -110,13 +148,16 @@ public class ItemsAdderBedrockConversionService {
             int skippedItems,
             List<String> warnings,
             List<String> skippedDetails,
-            File packFile
+            File packFile,
+            File mappingFile
     ) {
 
         public boolean isSuccessful() {
             return successful
                     && packFile != null
-                    && packFile.isFile();
+                    && packFile.isFile()
+                    && mappingFile != null
+                    && mappingFile.isFile();
         }
     }
 }
