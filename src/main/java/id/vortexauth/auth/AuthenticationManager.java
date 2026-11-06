@@ -2,6 +2,7 @@
 package id.vortexauth.auth;
 
 import id.vortexauth.VortexAuth;
+import id.vortexauth.session.SessionManager;
 
 import java.sql.SQLException;
 import java.util.UUID;
@@ -44,7 +45,10 @@ public final class AuthenticationManager {
             return AuthResult.ALREADY_LOGGED_IN;
         }
 
-        if (!plugin.getConfig().getBoolean("authentication.enabled", true)) {
+        if (!plugin.getConfig().getBoolean(
+                "authentication.enabled",
+                true
+        )) {
             return AuthResult.INTERNAL_ERROR;
         }
 
@@ -62,12 +66,19 @@ public final class AuthenticationManager {
         return login(uuid, password, null);
     }
 
-    public AuthResult login(UUID uuid, String password, String ipHash) {
+    public AuthResult login(
+            UUID uuid,
+            String password,
+            String ipHash
+    ) {
         if (uuid == null || password == null) {
             return AuthResult.INTERNAL_ERROR;
         }
 
-        if (!plugin.getConfig().getBoolean("authentication.enabled", true)) {
+        if (!plugin.getConfig().getBoolean(
+                "authentication.enabled",
+                true
+        )) {
             return AuthResult.INTERNAL_ERROR;
         }
 
@@ -80,7 +91,8 @@ public final class AuthenticationManager {
         }
 
         try {
-            AccountManager.Account account = accountManager.getAccount(uuid);
+            AccountManager.Account account =
+                    accountManager.getAccount(uuid);
 
             if (account == null) {
                 return AuthResult.NOT_REGISTERED;
@@ -89,13 +101,12 @@ public final class AuthenticationManager {
             boolean valid = accountManager.login(uuid, password);
 
             if (!valid) {
-                loginAttemptManager.recordFailedAttempt(uuid);
+                boolean locked =
+                        loginAttemptManager.recordFailedAttempt(uuid);
 
-                if (loginAttemptManager.isLocked(uuid)) {
-                    return AuthResult.TOO_MANY_ATTEMPTS;
-                }
-
-                return AuthResult.INVALID_PASSWORD;
+                return locked
+                        ? AuthResult.TOO_MANY_ATTEMPTS
+                        : AuthResult.INVALID_PASSWORD;
             }
 
             loginAttemptManager.resetAttempts(uuid);
@@ -105,11 +116,12 @@ public final class AuthenticationManager {
 
         } catch (SQLException exception) {
             plugin.getLogger().severe(
-                    "Failed to authenticate account " + uuid + ": "
+                    "Database authentication error: "
                             + exception.getMessage()
             );
 
             return AuthResult.DATABASE_ERROR;
+
         } catch (Exception exception) {
             plugin.getLogger().severe(
                     "Unexpected authentication error: "
@@ -130,10 +142,14 @@ public final class AuthenticationManager {
     }
 
     public boolean isAuthenticated(UUID uuid) {
-        return uuid != null && sessionManager.isAuthenticated(uuid);
+        return uuid != null
+                && sessionManager.isAuthenticated(uuid);
     }
 
-    public boolean isAuthenticated(UUID uuid, String ipHash) {
+    public boolean isAuthenticated(
+            UUID uuid,
+            String ipHash
+    ) {
         return uuid != null
                 && sessionManager.isAuthenticated(uuid, ipHash);
     }
@@ -146,12 +162,24 @@ public final class AuthenticationManager {
         return uuid != null && loginAttemptManager.isLocked(uuid);
     }
 
+    public int getRemainingAttempts(UUID uuid) {
+        return loginAttemptManager.getRemainingAttempts(uuid);
+    }
+
+    public long getRemainingLockTime(UUID uuid) {
+        return loginAttemptManager.getRemainingLockTime(uuid);
+    }
+
     public void createBedrockSession(UUID uuid, String ipHash) {
         if (uuid == null) {
             return;
         }
 
         try {
+            if (!accountManager.exists(uuid)) {
+                return;
+            }
+
             sessionManager.createSession(uuid, ipHash);
             accountManager.updateLastLogin(uuid);
             loginAttemptManager.resetAttempts(uuid);
