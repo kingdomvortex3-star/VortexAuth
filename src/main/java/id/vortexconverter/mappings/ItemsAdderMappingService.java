@@ -2,22 +2,23 @@
 package id.vortexconverter.mappings;
 
 import id.vortexconverter.scanner.ItemsAdderConfigParser;
-import id.vortexconverter.scanner.ItemsAdderConfigParser.ParseResult;
 
 import java.io.File;
 import java.io.IOException;
+import java.util.ArrayList;
 import java.util.List;
-import java.util.Objects;
 
-public final class ItemsAdderMappingService {
+public class ItemsAdderMappingService {
 
     private final ItemsAdderConfigParser parser;
     private final ItemsAdderCustomMappingGenerator generator;
+    private final ItemsAdderMappingValidator validator;
     private final ItemsAdderMappingExporter exporter;
 
     public ItemsAdderMappingService() {
         this.parser = new ItemsAdderConfigParser();
         this.generator = new ItemsAdderCustomMappingGenerator();
+        this.validator = new ItemsAdderMappingValidator();
         this.exporter = new ItemsAdderMappingExporter();
     }
 
@@ -26,83 +27,114 @@ public final class ItemsAdderMappingService {
             File geyserDataDirectory
     ) throws IOException {
 
-        Objects.requireNonNull(
-                itemsAdderContents,
-                "ItemsAdder contents directory cannot be null."
-        );
-
-        Objects.requireNonNull(
-                geyserDataDirectory,
-                "Geyser data directory cannot be null."
-        );
-
-        if (!itemsAdderContents.exists()
+        if (itemsAdderContents == null
+                || !itemsAdderContents.exists()
                 || !itemsAdderContents.isDirectory()) {
             throw new IOException(
-                    "ItemsAdder contents directory does not exist: "
-                            + itemsAdderContents.getPath()
+                    "Folder ItemsAdder contents tidak ditemukan: "
+                            + itemsAdderContents
             );
         }
 
-        if (!geyserDataDirectory.exists()
-                && !geyserDataDirectory.mkdirs()) {
+        if (geyserDataDirectory == null) {
             throw new IOException(
-                    "Cannot create Geyser data directory: "
-                            + geyserDataDirectory.getPath()
+                    "Folder data Geyser tidak ditentukan."
             );
         }
 
-        if (!geyserDataDirectory.isDirectory()) {
+        ItemsAdderConfigParser.ParseResult parseResult =
+                parser.parse(itemsAdderContents);
+
+        if (parseResult == null) {
             throw new IOException(
-                    "Geyser data path is not a directory."
+                    "ItemsAdder parser tidak menghasilkan ParseResult."
             );
         }
 
-        ParseResult parseResult = parser.parse(itemsAdderContents);
-
-        if (parseResult.hasErrors()
-                && parseResult.getFilesRead() == 0) {
+        if (parseResult.getFilesRead() == 0) {
             throw new IOException(
-                    "ItemsAdder parsing failed: "
-                            + String.join("; ", parseResult.getErrors())
+                    "Tidak ada file konfigurasi ItemsAdder yang berhasil dibaca."
             );
         }
 
         ItemsAdderCustomMappingGenerator.MappingResult mappingResult =
                 generator.generate(parseResult);
 
-        if (!mappingResult.hasMappings()) {
-            return new ServiceResult(
-                    false,
-                    parseResult.getFilesRead(),
-                    parseResult.getAssets().size(),
-                    mappingResult.discoveredItems(),
-                    0,
-                    mappingResult.skippedCount(),
-                    mappingResult.warnings(),
-                    mappingResult.skipped(),
-                    parseResult.getErrors(),
-                    null
+        if (mappingResult == null) {
+            throw new IOException(
+                    "Mapping generator tidak menghasilkan hasil."
             );
         }
 
-        ItemsAdderMappingExporter.ExportResult exportResult =
+        ItemsAdderMappingValidator.ValidationResult validationResult =
+                validator.validate(mappingResult);
+
+        List<String> warnings = new ArrayList<>(
+                mappingResult.warnings()
+        );
+
+        warnings.addAll(validationResult.warnings());
+
+        List<String> skippedDetails = new ArrayList<>(
+                mappingResult.skipped()
+        );
+
+        List<String> parseErrors = new ArrayList<>();
+
+        if (parseResult.hasErrors()) {
+            warnings.add(
+                    "ItemsAdder parser melaporkan kesalahan. "
+                            + "Periksa konfigurasi ItemsAdder."
+            );
+        }
+
+        if (!validationResult.isSuccessful()) {
+            throw new IOException(
+                    "Mapping gagal divalidasi: "
+                            + String.join(
+                                    " | ",
+                                    validationResult.errors()
+                            )
+            );
+        }
+
+        if (!mappingResult.hasMappings()) {
+            throw new IOException(
+                    "Tidak ada mapping valid untuk diekspor."
+            );
+        }
+
+        ItemsAdderCustomMappingGenerator.MappingResult exportedResult =
                 exporter.export(
                         mappingResult,
                         geyserDataDirectory
                 );
 
+        if (exportedResult == null) {
+            throw new IOException(
+                    "Mapping exporter tidak mengembalikan hasil."
+            );
+        }
+
+        File outputFile = exportedResult.outputFile();
+
+        if (outputFile == null || !outputFile.isFile()) {
+            throw new IOException(
+                    "File mapping tidak ditemukan setelah proses export."
+            );
+        }
+
         return new ServiceResult(
-                exportResult.isSuccessful(),
+                true,
                 parseResult.getFilesRead(),
                 parseResult.getAssets().size(),
-                exportResult.discoveredItems(),
-                exportResult.exportedMappings(),
-                exportResult.skippedItems(),
-                mappingResult.warnings(),
-                mappingResult.skipped(),
-                parseResult.getErrors(),
-                exportResult.mappingFile()
+                mappingResult.discoveredItems(),
+                mappingResult.generatedMappings(),
+                mappingResult.skippedCount(),
+                warnings,
+                skippedDetails,
+                parseErrors,
+                outputFile
         );
     }
 
@@ -118,26 +150,8 @@ public final class ItemsAdderMappingService {
             List<String> parseErrors,
             File outputFile
     ) {
-        public ServiceResult {
-            warnings = List.copyOf(warnings);
-            skippedDetails = List.copyOf(skippedDetails);
-            parseErrors = List.copyOf(parseErrors);
-        }
-
-        public boolean hasOutput() {
-            return outputFile != null && outputFile.isFile();
-        }
-
-        public int warningCount() {
-            return warnings.size();
-        }
-
-        public int parseErrorCount() {
-            return parseErrors.size();
-        }
-
-        public boolean hasSkippedItems() {
-            return skippedItems > 0;
+        public boolean isSuccessful() {
+            return successful;
         }
     }
 }
