@@ -7,6 +7,7 @@ import id.vortexauth.auth.AuthenticationManager;
 import id.vortexauth.bedrock.BedrockFormManager;
 import id.vortexauth.bedrock.FloodgateManager;
 
+import org.bukkit.ChatColor;
 import org.bukkit.entity.Player;
 import org.bukkit.event.EventHandler;
 import org.bukkit.event.EventPriority;
@@ -86,16 +87,31 @@ public final class BedrockFormListener implements Listener {
             String xuid = floodgateManager.getXuid(player);
 
             if (xuid == null) {
-                player.kick(org.bukkit.ChatColor.RED
-                        + "Invalid Floodgate identity.");
+                player.kickPlayer(
+                        ChatColor.RED + "Invalid Floodgate identity."
+                );
                 return;
             }
 
-            if (accountManager.getAccountByXuid(xuid) == null) {
-                formManager.showRegisterForm(player);
-            } else {
-                formManager.showLoginForm(player);
+            boolean linked = accountManager
+                    .getAccountByXuid(xuid)
+                    .isPresent();
+
+            if (!linked) {
+                player.sendMessage(
+                        ChatColor.RED
+                                + "Akun Bedrock kamu belum terhubung."
+                );
+
+                player.sendMessage(
+                        ChatColor.GRAY
+                                + "Hubungi administrator untuk linking akun."
+                );
+
+                return;
             }
+
+            formManager.showLoginForm(player);
 
         } catch (SQLException exception) {
             plugin.getLogger().severe(
@@ -104,7 +120,7 @@ public final class BedrockFormListener implements Listener {
             );
 
             player.sendMessage(
-                    org.bukkit.ChatColor.RED
+                    ChatColor.RED
                             + "Database error. Please contact an administrator."
             );
         }
