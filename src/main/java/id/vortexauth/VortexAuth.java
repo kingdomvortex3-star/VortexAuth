@@ -21,6 +21,8 @@ import id.vortexauth.commands.RegisterCommand;
 
 import id.vortexauth.database.DatabaseManager;
 
+import id.vortexauth.discord.DiscordWebhookManager;
+
 import id.vortexauth.listeners.AntiBotListener;
 import id.vortexauth.listeners.AntiVpnListener;
 import id.vortexauth.listeners.BedrockFormListener;
@@ -30,7 +32,6 @@ import id.vortexauth.listeners.PlayerProtectionListener;
 
 import id.vortexauth.security.AntiBotManager;
 import id.vortexauth.security.AntiVpnManager;
-import id.vortexauth.security.DiscordWebhookManager;
 import id.vortexauth.security.IpAddressManager;
 
 import org.bukkit.ChatColor;
