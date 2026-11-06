@@ -25,13 +25,16 @@ jobs:
           java-version: '25'
           distribution: 'temurin'
 
-      - name: Setup Gradle
+      - name: Setup Gradle 9.2.1
         uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '9.2.1'
 
       - name: Build VortexAuth
-        run: ./gradlew clean build
+        run: gradle clean build
 
       - name: Upload VortexAuth JAR
+        if: success()
         uses: actions/upload-artifact@v4
         with:
           name: VortexAuth
