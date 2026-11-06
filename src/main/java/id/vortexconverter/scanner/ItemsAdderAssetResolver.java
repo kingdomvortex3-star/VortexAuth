@@ -8,9 +8,11 @@ import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Set;
 import java.util.stream.Stream;
 
 public final class ItemsAdderAssetResolver {
@@ -32,7 +34,16 @@ public final class ItemsAdderAssetResolver {
         }
 
         public Map<String, List<File>> getResolvedFiles() {
-            return Collections.unmodifiableMap(resolvedFiles);
+            Map<String, List<File>> copy = new LinkedHashMap<>();
+
+            resolvedFiles.forEach(
+                    (key, value) -> copy.put(
+                            key,
+                            Collections.unmodifiableList(value)
+                    )
+            );
+
+            return Collections.unmodifiableMap(copy);
         }
 
         public List<String> getMissingReferences() {
@@ -89,10 +100,17 @@ public final class ItemsAdderAssetResolver {
             return result;
         }
 
-        Map<String, List<File>> fileIndex = buildFileIndex(
-                contentsFolder,
-                result
-        );
+        FileIndex index;
+
+        try {
+            index = buildFileIndex(contentsFolder, result);
+        } catch (IOException exception) {
+            throw new IllegalStateException(
+                    "Failed to index ItemsAdder assets: "
+                            + exception.getMessage(),
+                    exception
+            );
+        }
 
         for (ItemsAdderConfigParser.AssetInfo asset : parsed.getAssets()) {
             ResolvedAsset resolved = new ResolvedAsset(asset);
@@ -113,17 +131,20 @@ public final class ItemsAdderAssetResolver {
                 for (String reference : references) {
                     List<File> matches = findFiles(
                             reference,
-                            fileIndex,
+                            asset.getNamespace(),
+                            index,
                             key
                     );
 
+                    String resultKey = entry.getKey() + ":" + reference;
+
                     if (matches.isEmpty()) {
                         resolved.missingReferences.add(
-                                entry.getKey() + " = " + reference
+                                resultKey
                         );
                     } else {
                         resolved.resolvedFiles.put(
-                                entry.getKey() + ":" + reference,
+                                resultKey,
                                 matches
                         );
 
@@ -141,130 +162,394 @@ public final class ItemsAdderAssetResolver {
         return result;
     }
 
-    private Map<String, List<File>> buildFileIndex(
+    private FileIndex buildFileIndex(
             File root,
             ResolutionResult result
-    ) {
-        Map<String, List<File>> index = new LinkedHashMap<>();
+    ) throws IOException {
 
-        try (Stream<Path> paths = Files.walk(root.toPath())) {
-            paths.filter(Files::isRegularFile).forEach(path -> {
-                File file = path.toFile();
+        Path rootPath = root.toPath().toRealPath();
+        FileIndex index = new FileIndex();
 
-                String relative = root.toPath()
-                        .relativize(path)
+        try (Stream<Path> paths = Files.walk(rootPath)) {
+            for (Path path : paths
+                    .filter(Files::isRegularFile)
+                    .toList()) {
+
+                Path realPath = path.toRealPath();
+
+                if (!realPath.startsWith(rootPath)) {
+                    continue;
+                }
+
+                File file = realPath.toFile();
+
+                String relative = rootPath.relativize(realPath)
                         .toString()
                         .replace('\\', '/')
                         .toLowerCase(Locale.ROOT);
 
-                String filename = file.getName()
-                        .toLowerCase(Locale.ROOT);
-
-                index.computeIfAbsent(relative, ignored ->
-                        new ArrayList<>()).add(file);
-
-                index.computeIfAbsent(filename, ignored ->
-                        new ArrayList<>()).add(file);
-
+                index.add(relative, file);
                 result.scannedFiles++;
-            });
-        } catch (IOException exception) {
-            throw new IllegalStateException(
-                    "Failed to index ItemsAdder assets: "
-                            + exception.getMessage(),
-                    exception
-            );
+            }
         }
 
         return index;
     }
 
     private boolean isAssetReference(String key) {
-        return key.contains("texture")
-                || key.contains("model")
-                || key.endsWith("path")
-                || key.contains("item_model");
+        if (key.contains("material")
+                || key.contains("display_name")
+                || key.contains("permission")
+                || key.contains("custom_model_data")) {
+            return false;
+        }
+
+        return key.equals("texture")
+                || key.equals("textures")
+                || key.endsWith(".texture")
+                || key.endsWith(".textures")
+                || key.contains("texture_path")
+                || key.equals("model")
+                || key.endsWith(".model")
+                || key.contains("model_path")
+                || key.contains("item_model")
+                || key.equals("geometry")
+                || key.contains("sound")
+                || key.endsWith("_file")
+                || key.endsWith("_path");
     }
 
     private List<String> splitReferences(String value) {
-        List<String> references = new ArrayList<>();
-
         if (value == null || value.isBlank()) {
-            return references;
+            return List.of();
         }
 
-        for (String part : value.split(",")) {
+        Set<String> references = new LinkedHashSet<>();
+
+        String cleaned = value.trim();
+
+        if (cleaned.startsWith("[") && cleaned.endsWith("]")) {
+            cleaned = cleaned.substring(1, cleaned.length() - 1);
+        }
+
+        for (String part : cleaned.split(",")) {
             String reference = part.trim()
                     .replace("\\", "/")
                     .replace("\"", "")
                     .replace("'", "");
 
-            if (!reference.isBlank()) {
-                references.add(reference);
+            if (reference.isBlank()
+                    || reference.equalsIgnoreCase("none")
+                    || reference.equalsIgnoreCase("null")
+                    || reference.contains("{")
+                    || reference.contains("}")) {
+                continue;
             }
+
+            references.add(reference);
         }
 
-        return references;
+        return new ArrayList<>(references);
     }
 
     private List<File> findFiles(
             String reference,
-            Map<String, List<File>> index,
+            String namespace,
+            FileIndex index,
             String property
     ) {
-        String normalized = reference
-                .replace("\\", "/")
-                .replaceFirst("^/+", "")
-                .toLowerCase(Locale.ROOT);
+        String normalized = normalizeReference(reference);
+
+        if (normalized.isBlank()) {
+            return List.of();
+        }
+
+        String referenceNamespace = null;
+        int colon = normalized.indexOf(':');
+
+        if (colon > 0) {
+            referenceNamespace = normalized.substring(0, colon);
+            normalized = normalized.substring(colon + 1);
+        }
+
+        String extension = expectedExtension(property);
 
         List<String> candidates = new ArrayList<>();
-        candidates.add(normalized);
 
-        boolean hasExtension = normalized.matches(".*\\.[a-z0-9]+$");
+        addCandidate(candidates, normalized, extension);
 
-        if (!hasExtension) {
-            if (property.contains("texture")) {
-                candidates.add(normalized + ".png");
-            } else if (property.contains("model")) {
-                candidates.add(normalized + ".json");
-                candidates.add(normalized + ".bbmodel");
-            } else {
-                candidates.add(normalized + ".png");
-                candidates.add(normalized + ".json");
-                candidates.add(normalized + ".bbmodel");
+        if (!normalized.startsWith("textures/")) {
+            addCandidate(
+                    candidates,
+                    "textures/" + normalized,
+                    extension
+            );
+        }
+
+        if (!normalized.startsWith("resource/")) {
+            addCandidate(
+                    candidates,
+                    "resource/" + normalized,
+                    extension
+            );
+        }
+
+        if (extension.equals(".png")) {
+            addCandidate(
+                    candidates,
+                    "textures/items/" + normalized,
+                    extension
+            );
+            addCandidate(
+                    candidates,
+                    "textures/blocks/" + normalized,
+                    extension
+            );
+        }
+
+        for (String candidate : candidates) {
+            List<File> exactMatches = index.findExact(
+                    candidate,
+                    referenceNamespace,
+                    namespace
+            );
+
+            if (!exactMatches.isEmpty()) {
+                return exactMatches;
             }
         }
 
         for (String candidate : candidates) {
-            List<File> exact = index.get(candidate);
+            List<File> suffixMatches = index.findSuffix(
+                    candidate,
+                    referenceNamespace,
+                    namespace
+            );
 
-            if (exact != null && !exact.isEmpty()) {
-                return deduplicate(exact);
+            if (!suffixMatches.isEmpty()) {
+                return suffixMatches;
             }
         }
 
-        for (String candidate : candidates) {
-            List<File> matches = new ArrayList<>();
+        String basename = normalized.substring(
+                normalized.lastIndexOf('/') + 1
+        );
 
-            for (Map.Entry<String, List<File>> entry : index.entrySet()) {
-                String indexedPath = entry.getKey();
+        if (!hasExtension(basename)) {
+            basename += extension;
+        }
 
-                if (indexedPath.endsWith("/" + candidate)) {
-                    matches.addAll(entry.getValue());
-                }
-            }
+        List<File> namespaceMatches = index.findBasename(
+                basename,
+                namespace
+        );
 
-            if (!matches.isEmpty()) {
-                return deduplicate(matches);
-            }
+        if (!namespaceMatches.isEmpty()) {
+            return namespaceMatches;
+        }
+
+        if (referenceNamespace != null) {
+            return index.findBasename(
+                    basename,
+                    referenceNamespace
+            );
         }
 
         return List.of();
     }
 
-    private List<File> deduplicate(List<File> files) {
-        return new ArrayList<>(
-                files.stream().distinct().toList()
-        );
+    private void addCandidate(
+            List<String> candidates,
+            String value,
+            String extension
+    ) {
+        String normalized = normalizeReference(value);
+
+        if (normalized.isBlank()) {
+            return;
+        }
+
+        if (!hasExtension(normalized)) {
+            normalized += extension;
+        }
+
+        if (!candidates.contains(normalized)) {
+            candidates.add(normalized);
+        }
+    }
+
+    private String expectedExtension(String property) {
+        if (property.contains("texture")) {
+            return ".png";
+        }
+
+        if (property.contains("model")
+                || property.contains("geometry")
+                || property.contains("item_model")) {
+            return ".json";
+        }
+
+        if (property.contains("sound")) {
+            return ".ogg";
+        }
+
+        return ".png";
+    }
+
+    private String normalizeReference(String value) {
+        String normalized = value.trim()
+                .replace('\\', '/')
+                .toLowerCase(Locale.ROOT);
+
+        while (normalized.startsWith("./")) {
+            normalized = normalized.substring(2);
+        }
+
+        while (normalized.startsWith("/")) {
+            normalized = normalized.substring(1);
+        }
+
+        return normalized;
+    }
+
+    private boolean hasExtension(String value) {
+        int slash = value.lastIndexOf('/');
+        int dot = value.lastIndexOf('.');
+
+        return dot > slash;
+    }
+
+    private static final class FileIndex {
+
+        private final Map<String, List<File>> byPath =
+                new LinkedHashMap<>();
+
+        private final Map<String, List<File>> byBasename =
+                new LinkedHashMap<>();
+
+        private final Map<String, List<File>> byNamespaceBasename =
+                new LinkedHashMap<>();
+
+        void add(String relativePath, File file) {
+            String path = normalize(relativePath);
+
+            byPath.computeIfAbsent(
+                    path,
+                    ignored -> new ArrayList<>()
+            ).add(file);
+
+            String basename = file.getName()
+                    .toLowerCase(Locale.ROOT);
+
+            byBasename.computeIfAbsent(
+                    basename,
+                    ignored -> new ArrayList<>()
+            ).add(file);
+
+            String[] parts = path.split("/");
+
+            if (parts.length >= 2) {
+                String namespace = parts[0];
+
+                String key = namespace + ":" + basename;
+
+                byNamespaceBasename.computeIfAbsent(
+                        key,
+                        ignored -> new ArrayList<>()
+                ).add(file);
+            }
+        }
+
+        List<File> findExact(
+                String path,
+                String referenceNamespace,
+                String assetNamespace
+        ) {
+            String normalized = normalize(path);
+
+            if (referenceNamespace != null) {
+                List<File> namespaced = byPath.get(
+                        referenceNamespace.toLowerCase(Locale.ROOT)
+                                + "/" + normalized
+                );
+
+                if (namespaced != null && !namespaced.isEmpty()) {
+                    return unique(namespaced);
+                }
+            }
+
+            List<File> local = byPath.get(
+                    assetNamespace.toLowerCase(Locale.ROOT)
+                            + "/" + normalized
+            );
+
+            if (local != null && !local.isEmpty()) {
+                return unique(local);
+            }
+
+            List<File> exact = byPath.get(normalized);
+
+            return exact == null ? List.of() : unique(exact);
+        }
+
+        List<File> findSuffix(
+                String suffix,
+                String referenceNamespace,
+                String assetNamespace
+        ) {
+            String normalized = normalize(suffix);
+
+            List<File> matches = new ArrayList<>();
+
+            String requiredNamespace = referenceNamespace != null
+                    ? referenceNamespace.toLowerCase(Locale.ROOT)
+                    : assetNamespace.toLowerCase(Locale.ROOT);
+
+            for (Map.Entry<String, List<File>> entry : byPath.entrySet()) {
+                String path = entry.getKey();
+
+                if (!path.startsWith(requiredNamespace + "/")) {
+                    continue;
+                }
+
+                if (path.endsWith("/" + normalized)
+                        || path.equals(requiredNamespace + "/" + normalized)) {
+                    matches.addAll(entry.getValue());
+                }
+            }
+
+            if (matches.isEmpty() && referenceNamespace == null) {
+                for (Map.Entry<String, List<File>> entry : byPath.entrySet()) {
+                    if (entry.getKey().endsWith("/" + normalized)) {
+                        matches.addAll(entry.getValue());
+                    }
+                }
+            }
+
+            return unique(matches);
+        }
+
+        List<File> findBasename(
+                String basename,
+                String namespace
+        ) {
+            String key = namespace.toLowerCase(Locale.ROOT)
+                    + ":" + basename.toLowerCase(Locale.ROOT);
+
+            List<File> matches = byNamespaceBasename.get(key);
+
+            return matches == null ? List.of() : unique(matches);
+        }
+
+        private List<File> unique(List<File> files) {
+            return new ArrayList<>(
+                    new LinkedHashSet<>(files)
+            );
+        }
+
+        private String normalize(String value) {
+            return value.replace('\\', '/')
+                    .toLowerCase(Locale.ROOT);
+        }
     }
 }
