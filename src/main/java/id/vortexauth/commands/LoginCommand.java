@@ -4,6 +4,7 @@ package id.vortexauth.commands;
 import id.vortexauth.VortexAuth;
 import id.vortexauth.auth.AuthResult;
 import id.vortexauth.auth.AuthenticationManager;
+
 import org.bukkit.ChatColor;
 import org.bukkit.command.Command;
 import org.bukkit.command.CommandExecutor;
@@ -36,23 +37,57 @@ public final class LoginCommand implements CommandExecutor {
         }
 
         if (!plugin.getConfig().getBoolean(
-                "authentication.login.enabled",
-                true
+                "authentication.login.enabled", true
         )) {
             sendRaw(player, "&cLogin is currently disabled.");
             return true;
         }
 
         if (player.hasPermission("vortexauth.bypass")) {
-            sendRaw(player, "&cYou are using authentication bypass.");
+            sendRaw(player, "&aAuthentication bypass is enabled.");
+            return true;
+        }
+
+        if (args.length != 1) {
+            sendRaw(player, "&cUsage: /login <password>");
+            return true;
+        }
+
+        boolean ipCheck = plugin.getConfig().getBoolean(
+                "session.ip-check", true
+        );
+
+        String ipHash = null;
+
+        if (ipCheck) {
+            if (plugin.getIpAddressManager() == null) {
+                sendRaw(player, "&cAuthentication security is unavailable.");
+                return true;
+            }
+
+            ipHash = plugin.getIpAddressManager()
+                    .getPlayerIpHash(player);
+
+            if (ipHash == null || ipHash.isBlank()) {
+                sendRaw(player, "&cUnable to verify your connection.");
+                return true;
+            }
+        }
+
+        if (authenticationManager.isAuthenticated(
+                player.getUniqueId(),
+                ipHash
+        )) {
+            sendRaw(player, "&aYou are already logged in!");
             return true;
         }
 
         if (authenticationManager.isAuthenticated(
                 player.getUniqueId()
         )) {
-            sendRaw(player, "&aYou are already logged in!");
-            return true;
+            authenticationManager.invalidateSession(
+                    player.getUniqueId()
+            );
         }
 
         if (!authenticationManager.isRegistered(
@@ -69,29 +104,38 @@ public final class LoginCommand implements CommandExecutor {
             return true;
         }
 
-        if (args.length != 1) {
-            sendRaw(player, "&cUsage: /login <password>");
-            return true;
-        }
-
-        String ipHash = plugin.getIpAddressManager() == null
-                ? null
-                : plugin.getIpAddressManager().getPlayerIpHash(player);
-
         AuthResult result = authenticationManager.login(
                 player.getUniqueId(),
                 args[0],
                 ipHash
         );
 
-        handleResult(player, result);
+        handleResult(player, result, ipHash);
 
         return true;
     }
 
-    private void handleResult(Player player, AuthResult result) {
+    private void handleResult(
+            Player player,
+            AuthResult result,
+            String ipHash
+    ) {
         switch (result) {
             case SUCCESS -> {
+                if (!authenticationManager.isAuthenticated(
+                        player.getUniqueId(), ipHash
+                )) {
+                    authenticationManager.invalidateSession(
+                            player.getUniqueId()
+                    );
+
+                    sendRaw(
+                            player,
+                            "&cFailed to create authentication session."
+                    );
+                    return;
+                }
+
                 send(player, "messages.login-success");
                 sendRaw(
                         player,
