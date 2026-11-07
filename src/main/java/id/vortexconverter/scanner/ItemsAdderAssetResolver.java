@@ -1,6 +1,10 @@
 
 package id.vortexconverter.scanner;
 
+import com.google.gson.JsonElement;
+import com.google.gson.JsonObject;
+import com.google.gson.JsonParser;
+
 import java.io.File;
 import java.io.IOException;
 import java.nio.file.Files;
@@ -13,21 +17,9 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
-import java.util.regex.Matcher;
-import java.util.regex.Pattern;
 import java.util.stream.Stream;
 
 public final class ItemsAdderAssetResolver {
-
-    private static final Pattern TEXTURES_BLOCK = Pattern.compile(
-            "\"textures\"\\s*:\\s*\\{([^}]*)\\}",
-            Pattern.CASE_INSENSITIVE | Pattern.DOTALL
-    );
-
-    private static final Pattern TEXTURE_ENTRY = Pattern.compile(
-            "\"([^\"]+)\"\\s*:\\s*\"((?:\\\\.|[^\"\\\\])*)\"",
-            Pattern.DOTALL
-    );
 
     public static final class ResolvedAsset {
 
@@ -143,11 +135,6 @@ public final class ItemsAdderAssetResolver {
                     resolved.resolvedFiles.put(resultKey, matches);
                     result.resolvedFiles += matches.size();
 
-                    /*
-                     * Model JSON tidak hanya disimpan sebagai file model.
-                     * Bagian textures di dalamnya juga dibaca agar PNG
-                     * yang digunakan model dapat ditemukan otomatis.
-                     */
                     if (isModelProperty(property)) {
                         for (File modelFile : matches) {
                             resolveModelTextures(
@@ -182,38 +169,70 @@ public final class ItemsAdderAssetResolver {
             return;
         }
 
-        final String json;
-
         try {
-            json = Files.readString(modelFile.toPath());
-        } catch (IOException exception) {
-            resolved.missingReferences.add(
-                    "model_read:" + modelReference + ":" + modelFile.getName()
-            );
-            return;
-        }
+            String json = Files.readString(modelFile.toPath());
+            JsonElement rootElement = JsonParser.parseString(json);
 
-        Matcher blockMatcher = TEXTURES_BLOCK.matcher(json);
-        int blockIndex = 0;
+            if (!rootElement.isJsonObject()) {
+                return;
+            }
 
-        while (blockMatcher.find()) {
-            blockIndex++;
+            JsonObject root = rootElement.getAsJsonObject();
 
-            String textureBlock = blockMatcher.group(1);
-            Matcher entryMatcher = TEXTURE_ENTRY.matcher(textureBlock);
+            if (!root.has("textures") || !root.get("textures").isJsonObject()) {
+                return;
+            }
 
-            while (entryMatcher.find()) {
-                String textureKey = entryMatcher.group(1).trim();
-                String textureReference = unescapeJson(entryMatcher.group(2).trim());
+            JsonObject textures = root.getAsJsonObject("textures");
+
+            for (Map.Entry<String, JsonElement> entry : textures.entrySet()) {
+                String textureKey = entry.getKey();
+                JsonElement value = entry.getValue();
+
+                if (!value.isJsonPrimitive()
+                        || !value.getAsJsonPrimitive().isString()) {
+                    continue;
+                }
+
+                String textureReference = value.getAsString().trim();
 
                 if (textureReference.isBlank()
-                        || textureReference.startsWith("#")
                         || textureReference.equalsIgnoreCase("null")) {
                     continue;
                 }
 
-                List<File> textureFiles = findFiles(
+                String resolvedReference = resolveTextureAlias(
                         textureReference,
+                        textures,
+                        new LinkedHashSet<>()
+                );
+
+                if (resolvedReference == null || resolvedReference.isBlank()) {
+                    resolved.missingReferences.add(
+                            "model_texture_alias:"
+                                    + modelReference
+                                    + ":"
+                                    + textureKey
+                                    + ":"
+                                    + textureReference
+                    );
+                    continue;
+                }
+
+                if (resolvedReference.startsWith("#")) {
+                    resolved.missingReferences.add(
+                            "model_texture_alias:"
+                                    + modelReference
+                                    + ":"
+                                    + textureKey
+                                    + ":"
+                                    + resolvedReference
+                    );
+                    continue;
+                }
+
+                List<File> textureFiles = findFiles(
+                        resolvedReference,
                         assetNamespace,
                         index,
                         "texture"
@@ -222,28 +241,66 @@ public final class ItemsAdderAssetResolver {
                 String resultKey = "textures:model_texture:"
                         + modelReference
                         + ":"
-                        + blockIndex
-                        + ":"
                         + textureKey
                         + ":"
-                        + textureReference;
+                        + resolvedReference;
 
                 if (textureFiles.isEmpty()) {
                     resolved.missingReferences.add(resultKey);
                     continue;
                 }
 
-                resolved.resolvedFiles.put(resultKey, textureFiles);
-                result.resolvedFiles += textureFiles.size();
+                if (!resolved.resolvedFiles.containsKey(resultKey)) {
+                    resolved.resolvedFiles.put(resultKey, textureFiles);
+                    result.resolvedFiles += textureFiles.size();
+                }
             }
+
+        } catch (Exception exception) {
+            resolved.missingReferences.add(
+                    "model_read:"
+                            + modelReference
+                            + ":"
+                            + modelFile.getName()
+                            + ":"
+                            + exception.getMessage()
+            );
         }
     }
 
-    private String unescapeJson(String value) {
-        return value
-                .replace("\\/", "/")
-                .replace("\\\\", "\\")
-                .replace("\\\"", "\"");
+    private String resolveTextureAlias(
+            String reference,
+            JsonObject textures,
+            Set<String> visited
+    ) {
+        if (reference == null) {
+            return null;
+        }
+
+        String current = reference.trim();
+
+        if (!current.startsWith("#")) {
+            return current;
+        }
+
+        String key = current.substring(1).trim();
+
+        if (key.isBlank() || !visited.add(key) || !textures.has(key)) {
+            return null;
+        }
+
+        JsonElement value = textures.get(key);
+
+        if (!value.isJsonPrimitive()
+                || !value.getAsJsonPrimitive().isString()) {
+            return null;
+        }
+
+        return resolveTextureAlias(
+                value.getAsString(),
+                textures,
+                visited
+        );
     }
 
     private FileIndex buildFileIndex(
@@ -381,7 +438,6 @@ public final class ItemsAdderAssetResolver {
                 ? referenceNamespace
                 : namespace;
 
-        // 1. Pencarian jalur lengkap.
         for (String candidate : candidates) {
             List<File> matches = index.findExact(
                     candidate,
@@ -393,7 +449,6 @@ public final class ItemsAdderAssetResolver {
             }
         }
 
-        // 2. Pencarian akhiran jalur dalam namespace.
         for (String candidate : candidates) {
             List<File> matches = index.findSuffix(
                     candidate,
@@ -405,7 +460,6 @@ public final class ItemsAdderAssetResolver {
             }
         }
 
-        // 3. Pencarian basename dalam namespace jika unik.
         for (String candidate : candidates) {
             String basename = getBasename(candidate);
 
@@ -423,7 +477,6 @@ public final class ItemsAdderAssetResolver {
             }
         }
 
-        // 4. Pencarian global hanya jika hasilnya unik.
         for (String candidate : candidates) {
             List<File> matches = index.findGlobalSuffix(candidate);
 
@@ -574,7 +627,6 @@ public final class ItemsAdderAssetResolver {
     private static final class FileIndex {
 
         private final Map<String, List<File>> byPath = new LinkedHashMap<>();
-        private final Map<String, List<File>> byBasename = new LinkedHashMap<>();
         private final Map<String, List<File>> byNamespaceBasename = new LinkedHashMap<>();
 
         void add(String relativePath, File file) {
@@ -583,8 +635,6 @@ public final class ItemsAdderAssetResolver {
             byPath.computeIfAbsent(path, ignored -> new ArrayList<>()).add(file);
 
             String basename = file.getName().toLowerCase(Locale.ROOT);
-
-            byBasename.computeIfAbsent(basename, ignored -> new ArrayList<>()).add(file);
 
             for (String namespace : extractNamespaces(path)) {
                 String key = namespace + ":" + basename;
@@ -617,14 +667,21 @@ public final class ItemsAdderAssetResolver {
             String normalized = normalize(candidate);
             String preferred = namespace.toLowerCase(Locale.ROOT);
 
-            List<File> namespaced = byPath.get(preferred + "/" + normalized);
+            List<String> paths = List.of(
+                    preferred + "/" + normalized,
+                    "assets/" + preferred + "/" + normalized,
+                    normalized
+            );
 
-            if (namespaced != null && !namespaced.isEmpty()) {
-                return unique(namespaced);
+            for (String path : paths) {
+                List<File> matches = byPath.get(path);
+
+                if (matches != null && !matches.isEmpty()) {
+                    return unique(matches);
+                }
             }
 
-            List<File> exact = byPath.get(normalized);
-            return exact == null ? List.of() : unique(exact);
+            return List.of();
         }
 
         List<File> findSuffix(String suffix, String namespace) {
@@ -640,6 +697,7 @@ public final class ItemsAdderAssetResolver {
                 }
 
                 if (path.equals(preferred + "/" + normalized)
+                        || path.equals("assets/" + preferred + "/" + normalized)
                         || path.endsWith("/" + normalized)) {
                     matches.addAll(entry.getValue());
                 }
@@ -673,6 +731,7 @@ public final class ItemsAdderAssetResolver {
 
         private boolean belongsToNamespace(String path, String namespace) {
             return path.startsWith(namespace + "/")
+                    || path.startsWith("assets/" + namespace + "/")
                     || path.contains("/assets/" + namespace + "/");
         }
 
