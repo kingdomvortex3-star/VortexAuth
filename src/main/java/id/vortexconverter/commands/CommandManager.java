@@ -21,7 +21,6 @@ import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
 
 import java.io.File;
-import java.io.IOException;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
@@ -125,14 +124,9 @@ public final class CommandManager implements CommandExecutor, TabCompleter {
             return;
         }
 
-        Plugin geyser = Bukkit.getPluginManager()
-                .getPlugin("Geyser-Spigot");
+        Plugin geyser = findGeyser();
 
-        if (geyser == null || !geyser.isEnabled()) {
-            geyser = Bukkit.getPluginManager().getPlugin("Geyser");
-        }
-
-        if (geyser == null || !geyser.isEnabled()) {
+        if (geyser == null) {
             sender.sendMessage("§cGeyser is not installed or enabled.");
             return;
         }
@@ -157,96 +151,103 @@ public final class CommandManager implements CommandExecutor, TabCompleter {
 
         sender.sendMessage("§8--------------------------------");
         sender.sendMessage("§b§lVortexConverter Auto Deploy");
-        sender.sendMessage("§7Scanning ItemsAdder namespaces...");
+        sender.sendMessage("§7Starting background conversion...");
         sender.sendMessage("§7Source: §f" + contents.getPath());
         sender.sendMessage("§7Geyser: §f" + geyserData.getPath());
+        sender.sendMessage("§ePlease wait. The server thread will remain available.");
         sender.sendMessage("§8--------------------------------");
 
-        try {
-            ConversionResult result =
-                    bedrockConversionService.convert(
-                            contents,
-                            geyserData
-                    );
+        Bukkit.getScheduler().runTaskAsynchronously(plugin, () -> {
+            try {
+                ConversionResult result =
+                        bedrockConversionService.convert(
+                                contents,
+                                geyserData
+                        );
 
+                Bukkit.getScheduler().runTask(plugin, () ->
+                        sendConversionReport(sender, result)
+                );
+
+            } catch (Exception exception) {
+                plugin.getLogger().severe(
+                        "ItemsAdder Bedrock conversion failed: "
+                                + exception.getMessage()
+                );
+
+                exception.printStackTrace();
+
+                Bukkit.getScheduler().runTask(plugin, () -> {
+                    sender.sendMessage("§cItemsAdder conversion failed:");
+                    sender.sendMessage("§7" + exception.getMessage());
+                    sender.sendMessage("§7Check the server console for details.");
+                });
+            }
+        });
+    }
+
+    private void sendConversionReport(
+            CommandSender sender,
+            ConversionResult result
+    ) {
+        sender.sendMessage("§8--------------------------------");
+        sender.sendMessage("§a§lCONVERSION REPORT");
+        sender.sendMessage("§7YAML files read: §f" + result.filesRead());
+        sender.sendMessage("§7Total assets: §f" + result.totalAssets());
+        sender.sendMessage("§7Items discovered: §f"
+                + result.discoveredItems());
+        sender.sendMessage("§7Textures copied: §a"
+                + result.convertedTextures());
+        sender.sendMessage("§7Items skipped: §e"
+                + result.skippedItems());
+
+        sender.sendMessage("§8--------------------------------");
+        sender.sendMessage("§a[RESOURCE PACK]");
+        sender.sendMessage("§f" + result.packFile().getPath());
+
+        sender.sendMessage("§8--------------------------------");
+        sender.sendMessage("§a[CUSTOM MAPPINGS]");
+        sender.sendMessage("§f" + result.mappingFile().getPath());
+
+        sendWarnings(sender, result.warnings());
+
+        if (result.skippedDetails() != null
+                && !result.skippedDetails().isEmpty()) {
             sender.sendMessage("§8--------------------------------");
-            sender.sendMessage("§a§lCONVERSION REPORT");
-            sender.sendMessage("§7YAML files read: §f" + result.filesRead());
-            sender.sendMessage("§7Total assets: §f" + result.totalAssets());
-            sender.sendMessage("§7Items discovered: §f"
-                    + result.discoveredItems());
-            sender.sendMessage("§7Textures copied: §a"
-                    + result.convertedTextures());
-            sender.sendMessage("§7Items skipped: §e"
-                    + result.skippedItems());
+            sender.sendMessage("§e[SKIPPED ITEMS]");
 
-            sender.sendMessage("§8--------------------------------");
-            sender.sendMessage("§a[RESOURCE PACK]");
-            sender.sendMessage("§f" + result.packFile().getPath());
+            int shown = 0;
 
-            sender.sendMessage("§8--------------------------------");
-            sender.sendMessage("§a[CUSTOM MAPPINGS]");
-            sender.sendMessage("§f" + result.mappingFile().getPath());
-
-            sendWarnings(sender, result.warnings());
-
-            if (result.skippedDetails() != null
-                    && !result.skippedDetails().isEmpty()) {
-                sender.sendMessage("§8--------------------------------");
-                sender.sendMessage("§e[SKIPPED ITEMS]");
-
-                int shown = 0;
-
-                for (String detail : result.skippedDetails()) {
-                    if (shown >= 10) {
-                        sender.sendMessage("§7...and more skipped items.");
-                        break;
-                    }
-
-                    sender.sendMessage("§e- " + detail);
-                    shown++;
+            for (String detail : result.skippedDetails()) {
+                if (shown >= 10) {
+                    sender.sendMessage("§7...and more skipped items.");
+                    break;
                 }
+
+                sender.sendMessage("§e- " + detail);
+                shown++;
             }
-
-            sender.sendMessage("§8--------------------------------");
-
-            if (result.isSuccessful()) {
-                sender.sendMessage("§a§lAUTO DEPLOY COMPLETED");
-                sender.sendMessage(
-                        "§7Resource pack and mappings were generated."
-                );
-                sender.sendMessage(
-                        "§7Restart Geyser/server to load the new content."
-                );
-                sender.sendMessage(
-                        "§7Check Geyser custom-content settings if the pack "
-                                + "is not delivered to Bedrock players."
-                );
-            } else {
-                sender.sendMessage("§cAuto deploy was unsuccessful.");
-            }
-
-            sender.sendMessage("§8--------------------------------");
-
-        } catch (IOException exception) {
-            sender.sendMessage("§cItemsAdder conversion failed:");
-            sender.sendMessage("§7" + exception.getMessage());
-
-            plugin.getLogger().severe(
-                    "ItemsAdder Bedrock conversion failed: "
-                            + exception.getMessage()
-            );
-
-        } catch (Exception exception) {
-            sender.sendMessage("§cUnexpected conversion error.");
-            sender.sendMessage("§7Check the server console.");
-
-            plugin.getLogger().severe(
-                    "Unexpected ItemsAdder Bedrock conversion error:"
-            );
-
-            exception.printStackTrace();
         }
+
+        sender.sendMessage("§8--------------------------------");
+
+        if (result.isSuccessful()) {
+            sender.sendMessage("§a§lAUTO DEPLOY COMPLETED");
+            sender.sendMessage(
+                    "§7Resource pack and mappings were generated."
+            );
+            sender.sendMessage(
+                    "§7Restart Geyser/server to load the new content."
+            );
+            sender.sendMessage(
+                    "§7Check Geyser custom-content settings if the pack "
+                            + "is not delivered to Bedrock players."
+            );
+        } else {
+            sender.sendMessage("§cAuto deploy was unsuccessful.");
+        }
+
+        sender.sendMessage("§8--------------------------------");
     }
 
     private void handleMappings(
@@ -389,8 +390,26 @@ public final class CommandManager implements CommandExecutor, TabCompleter {
     }
 
     private void scanItemsAdder(CommandSender sender) {
+        Plugin itemsAdder = Bukkit.getPluginManager()
+                .getPlugin("ItemsAdder");
+
+        if (itemsAdder == null || !itemsAdder.isEnabled()) {
+            sender.sendMessage("§cItemsAdder is not installed or enabled.");
+            return;
+        }
+
+        File contents = new File(
+                itemsAdder.getDataFolder(),
+                "contents"
+        );
+
         sender.sendMessage("§b§lVortexConverter");
         sender.sendMessage("§7ItemsAdder asset analysis started...");
+
+        if (!contents.isDirectory()) {
+            sender.sendMessage("§cItemsAdder contents directory not found.");
+            return;
+        }
 
         ItemsAdderScanner.ScanResult scan = scanner.scan();
 
@@ -408,11 +427,6 @@ public final class CommandManager implements CommandExecutor, TabCompleter {
             sender.sendMessage("§cScanner error: " + scan.getError());
             return;
         }
-
-        File contents = new File(
-                plugin.getDataFolder().getParentFile(),
-                "ItemsAdder/contents"
-        );
 
         ItemsAdderConfigParser.ParseResult parsed =
                 parser.parse(contents);
