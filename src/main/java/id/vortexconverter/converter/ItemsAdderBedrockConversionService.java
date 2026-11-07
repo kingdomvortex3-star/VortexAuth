@@ -8,13 +8,11 @@ import id.vortexconverter.scanner.ItemsAdderConfigParser;
 
 import java.io.File;
 import java.io.IOException;
-import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.Map;
 
 public class ItemsAdderBedrockConversionService {
 
@@ -23,9 +21,6 @@ public class ItemsAdderBedrockConversionService {
 
     private static final String MAPPING_FILE_NAME =
             "vortexconverter-itemsadder.json";
-
-    private static final String DIAGNOSTIC_FILE_NAME =
-            "vortexconverter-itemsadder-diagnostic.txt";
 
     private final ItemsAdderConfigParser parser;
     private final ItemsAdderCustomMappingGenerator mappingGenerator;
@@ -53,6 +48,28 @@ public class ItemsAdderBedrockConversionService {
             );
         }
 
+        File itemsAdderDataDirectory =
+                itemsAdderContents.getParentFile();
+
+        if (itemsAdderDataDirectory == null) {
+            throw new IOException(
+                    "Folder data ItemsAdder tidak valid."
+            );
+        }
+
+        File generatedZip = new File(
+                itemsAdderDataDirectory,
+                "output/generated.zip"
+        );
+
+        if (!generatedZip.isFile()) {
+            throw new IOException(
+                    "ItemsAdder generated.zip tidak ditemukan: "
+                            + generatedZip.getPath()
+                            + ". Jalankan /iazip terlebih dahulu."
+            );
+        }
+
         if (geyserDataDirectory == null
                 || (!geyserDataDirectory.isDirectory()
                 && !geyserDataDirectory.mkdirs())) {
@@ -70,24 +87,12 @@ public class ItemsAdderBedrockConversionService {
             );
         }
 
-        // Buat laporan sebelum proses mapping dan konversi dimulai.
-        // Laporan tetap tersedia meskipun proses berikutnya gagal.
-        Path diagnosticPath = geyserDataDirectory.toPath()
-                .resolve(DIAGNOSTIC_FILE_NAME);
-
-        writeDiagnosticReport(
-                diagnosticPath,
-                itemsAdderContents,
-                parseResult
-        );
-
         ItemsAdderCustomMappingGenerator.MappingResult mappingResult =
                 mappingGenerator.generate(parseResult);
 
         if (mappingResult == null || !mappingResult.hasMappings()) {
             throw new IOException(
-                    "Tidak ada custom item mapping yang dapat dibuat. "
-                            + "Laporan diagnostik: " + diagnosticPath
+                    "Tidak ada custom item mapping yang dapat dibuat."
             );
         }
 
@@ -98,11 +103,11 @@ public class ItemsAdderBedrockConversionService {
             throw new IOException(
                     "Mapping tidak valid: "
                             + String.join(" | ", validation.errors())
-                            + ". Laporan diagnostik: " + diagnosticPath
             );
         }
 
-        Path geyserPath = geyserDataDirectory.toPath()
+        Path geyserPath = geyserDataDirectory
+                .toPath()
                 .toAbsolutePath()
                 .normalize();
 
@@ -125,6 +130,7 @@ public class ItemsAdderBedrockConversionService {
             ItemsAdderBedrockResourcePackBuilder.PackResult packResult =
                     packBuilder.build(
                             itemsAdderContents,
+                            generatedZip,
                             geyserDataDirectory,
                             parseResult,
                             mappingResult
@@ -132,8 +138,7 @@ public class ItemsAdderBedrockConversionService {
 
             if (packResult == null || !packResult.isSuccessful()) {
                 throw new IOException(
-                        "Resource pack gagal dibuat. "
-                                + "Laporan diagnostik: " + diagnosticPath
+                        "Resource pack gagal dibuat dari generated.zip."
                 );
             }
 
@@ -179,8 +184,21 @@ public class ItemsAdderBedrockConversionService {
             }
 
             warnings.add(
-                    "Laporan diagnostik tersedia di: "
-                            + diagnosticPath
+                    "Sumber metadata: ItemsAdder/contents."
+            );
+
+            warnings.add(
+                    "Sumber model dan tekstur: "
+                            + generatedZip.getPath()
+            );
+
+            warnings.add(
+                    "Resource pack berhasil dibuat sebelum mapping diekspor."
+            );
+
+            warnings.add(
+                    "Konversi menghasilkan file pada folder Geyser packs "
+                            + "dan custom_mappings."
             );
 
             return new ConversionResult(
@@ -230,154 +248,6 @@ public class ItemsAdderBedrockConversionService {
             deleteBackup(packBackup);
             deleteBackup(mappingBackup);
         }
-    }
-
-    private void writeDiagnosticReport(
-            Path output,
-            File contentsFolder,
-            ItemsAdderConfigParser.ParseResult result
-    ) throws IOException {
-
-        StringBuilder report = new StringBuilder();
-
-        report.append("VORTEXCONVERTER ITEMADDER DIAGNOSTIC\n");
-        report.append("====================================\n\n");
-
-        report.append("Contents folder: ")
-                .append(contentsFolder.getAbsolutePath())
-                .append('\n');
-
-        report.append("Files read: ")
-                .append(result.getFilesRead())
-                .append('\n');
-
-        report.append("Namespaces read: ")
-                .append(result.getNamespacesRead())
-                .append('\n');
-
-        report.append("Total assets: ")
-                .append(result.getTotalAssets())
-                .append('\n');
-
-        report.append("Items: ")
-                .append(result.count(
-                        ItemsAdderConfigParser.AssetType.ITEM
-                ))
-                .append('\n');
-
-        report.append("Blocks: ")
-                .append(result.count(
-                        ItemsAdderConfigParser.AssetType.BLOCK
-                ))
-                .append('\n');
-
-        report.append("Furniture: ")
-                .append(result.count(
-                        ItemsAdderConfigParser.AssetType.FURNITURE
-                ))
-                .append('\n');
-
-        report.append("Entities: ")
-                .append(result.count(
-                        ItemsAdderConfigParser.AssetType.ENTITY
-                ))
-                .append('\n');
-
-        report.append("Items with material: ")
-                .append(result.countWithMaterial())
-                .append('\n');
-
-        report.append("Items with texture property: ")
-                .append(result.countWithTexture())
-                .append('\n');
-
-        report.append("Items with model property: ")
-                .append(result.countWithModel())
-                .append('\n');
-
-        report.append("Items with Custom Model Data: ")
-                .append(result.countCustomModelData())
-                .append('\n');
-
-        report.append("Items with explicit Bedrock identifier: ")
-                .append(result.countWithBedrockIdentifier())
-                .append('\n');
-
-        report.append("\nCONFIGURATION ERRORS\n");
-        report.append("--------------------\n");
-
-        if (result.getErrors().isEmpty()) {
-            report.append("No parser errors.\n");
-        } else {
-            for (String error : result.getErrors()) {
-                report.append(error).append('\n');
-            }
-        }
-
-        report.append("\nDISCOVERED ASSETS\n");
-        report.append("-----------------\n");
-
-        for (ItemsAdderConfigParser.AssetInfo asset : result.getAssets()) {
-            report.append("\n[")
-                    .append(asset.getType())
-                    .append("] ")
-                    .append(asset.getNamespacedId())
-                    .append('\n');
-
-            report.append("Source: ")
-                    .append(asset.getSourceFile())
-                    .append('\n');
-
-            report.append("Material: ")
-                    .append(valueOrMissing(asset.getMaterial()))
-                    .append('\n');
-
-            report.append("Java identifier: ")
-                    .append(valueOrMissing(asset.getJavaIdentifier()))
-                    .append('\n');
-
-            report.append("Custom Model Data: ")
-                    .append(valueOrMissing(
-                            asset.getCustomModelDataValue()
-                    ))
-                    .append('\n');
-
-            report.append("Texture path: ")
-                    .append(valueOrMissing(asset.getTexturePath()))
-                    .append('\n');
-
-            report.append("Model path: ")
-                    .append(valueOrMissing(asset.getModelPath()))
-                    .append('\n');
-
-            report.append("Properties:\n");
-
-            if (asset.getProperties().isEmpty()) {
-                report.append("  (none)\n");
-            } else {
-                for (Map.Entry<String, String> property
-                        : asset.getProperties().entrySet()) {
-
-                    report.append("  ")
-                            .append(property.getKey())
-                            .append(" = ")
-                            .append(property.getValue())
-                            .append('\n');
-                }
-            }
-        }
-
-        Files.writeString(
-                output,
-                report.toString(),
-                StandardCharsets.UTF_8
-        );
-    }
-
-    private String valueOrMissing(String value) {
-        return value == null || value.isBlank()
-                ? "(not found)"
-                : value;
     }
 
     private FileBackup createBackup(Path target)
@@ -445,7 +315,7 @@ public class ItemsAdderBedrockConversionService {
         try {
             Files.deleteIfExists(backup.backup());
         } catch (IOException ignored) {
-            // Backup sementara akan dibersihkan pada proses berikutnya.
+            // Backup sementara dibersihkan pada proses berikutnya.
         }
     }
 
