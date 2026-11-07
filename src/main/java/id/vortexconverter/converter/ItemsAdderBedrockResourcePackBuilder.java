@@ -55,6 +55,9 @@ public class ItemsAdderBedrockResourcePackBuilder {
     private final ItemsAdderBedrockGeometryConverter geometryConverter =
             new ItemsAdderBedrockGeometryConverter();
 
+    private final ItemsAdderBedrockRenderControllerBuilder renderControllerBuilder =
+            new ItemsAdderBedrockRenderControllerBuilder();
+
     public PackResult build(
             File itemsAdderContents,
             File geyserDataDirectory,
@@ -474,6 +477,16 @@ public class ItemsAdderBedrockResourcePackBuilder {
                 new File(packRoot, "textures/item_texture.json"),
                 textureAtlas
         );
+
+        if (attachablesGenerated > 0) {
+            File renderControllerFile =
+                    renderControllerBuilder.write(packRoot);
+
+            warnings.add(
+                    "Render controller berhasil dibuat: "
+                            + renderControllerFile.getName()
+            );
+        }
 
         writeManifest(packRoot);
 
