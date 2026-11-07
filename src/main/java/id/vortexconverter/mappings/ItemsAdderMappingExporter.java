@@ -3,6 +3,8 @@ package id.vortexconverter.mappings;
 
 import com.google.gson.Gson;
 import com.google.gson.GsonBuilder;
+import com.google.gson.JsonArray;
+import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 
 import java.io.File;
@@ -13,6 +15,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
 import java.util.Objects;
+import java.util.Map;
 
 public final class ItemsAdderMappingExporter {
 
@@ -42,19 +45,32 @@ public final class ItemsAdderMappingExporter {
                 "Geyser directory cannot be null."
         );
 
-        if (!mappingResult.hasMappings()) {
+        JsonObject mapping = mappingResult.mapping();
+
+        if (!mappingResult.hasMappings()
+                || mapping == null
+                || !mapping.has("items")
+                || !mapping.get("items").isJsonObject()) {
             throw new IOException(
                     "No generated mappings available for export."
             );
         }
 
         ItemsAdderMappingValidator.ValidationResult validation =
-                validator.validate(mappingResult);
+                validator.validate(mapping);
 
         if (!validation.isSuccessful()) {
             throw new IOException(
                     "Mapping validation failed: "
                             + String.join("; ", validation.errors())
+            );
+        }
+
+        int actualMappings = countDefinitions(mapping);
+
+        if (actualMappings <= 0) {
+            throw new IOException(
+                    "No valid mapping definitions available for export."
             );
         }
 
@@ -99,14 +115,6 @@ public final class ItemsAdderMappingExporter {
             );
         }
 
-        JsonObject mapping = mappingResult.mapping();
-
-        if (mapping == null || mapping.entrySet().isEmpty()) {
-            throw new IOException(
-                    "Generated mapping JSON is empty."
-            );
-        }
-
         Path temporaryFile = Files.createTempFile(
                 mappingsDirectory,
                 "vortexconverter-",
@@ -119,6 +127,36 @@ public final class ItemsAdderMappingExporter {
                     gson.toJson(mapping),
                     StandardCharsets.UTF_8
             );
+
+            // Pastikan file sementara benar-benar berisi JSON valid.
+            String exportedJson = Files.readString(
+                    temporaryFile,
+                    StandardCharsets.UTF_8
+            );
+
+            com.google.gson.JsonElement parsed =
+                    com.google.gson.JsonParser.parseString(exportedJson);
+
+            if (!parsed.isJsonObject()) {
+                throw new IOException(
+                        "Temporary mapping file is not a JSON object."
+                );
+            }
+
+            JsonObject exportedMapping = parsed.getAsJsonObject();
+
+            ItemsAdderMappingValidator.ValidationResult exportedValidation =
+                    validator.validate(exportedMapping);
+
+            if (!exportedValidation.isSuccessful()) {
+                throw new IOException(
+                        "Temporary mapping validation failed: "
+                                + String.join(
+                                        "; ",
+                                        exportedValidation.errors()
+                                )
+                );
+            }
 
             try {
                 Files.move(
@@ -140,13 +178,59 @@ public final class ItemsAdderMappingExporter {
             Files.deleteIfExists(temporaryFile);
         }
 
+        if (!Files.isRegularFile(targetFile)) {
+            throw new IOException(
+                    "Mapping output file was not created."
+            );
+        }
+
         return new ExportResult(
                 targetFile.toFile(),
                 mappingResult.discoveredItems(),
-                mappingResult.generatedMappings(),
+                actualMappings,
                 mappingResult.skippedCount(),
                 mappingResult.warningCount()
         );
+    }
+
+    private int countDefinitions(JsonObject mapping)
+            throws IOException {
+
+        JsonElement itemsElement = mapping.get("items");
+
+        if (itemsElement == null || !itemsElement.isJsonObject()) {
+            throw new IOException(
+                    "Mapping items must be a JSON object."
+            );
+        }
+
+        int count = 0;
+
+        for (Map.Entry<String, JsonElement> entry
+                : itemsElement.getAsJsonObject().entrySet()) {
+
+            if (!entry.getValue().isJsonArray()) {
+                throw new IOException(
+                        "Mapping definitions must be an array: "
+                                + entry.getKey()
+                );
+            }
+
+            JsonArray definitions = entry.getValue().getAsJsonArray();
+
+            for (JsonElement definition : definitions) {
+                if (!definition.isJsonObject()) {
+                    throw new IOException(
+                            "Invalid mapping definition: "
+                                    + entry.getKey()
+                    );
+                }
+
+                count++;
+            }
+        }
+
+        return count;
     }
 
     public record ExportResult(
