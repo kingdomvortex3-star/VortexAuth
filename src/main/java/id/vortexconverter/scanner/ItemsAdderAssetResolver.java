@@ -13,9 +13,21 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 import java.util.stream.Stream;
 
 public final class ItemsAdderAssetResolver {
+
+    private static final Pattern TEXTURES_BLOCK = Pattern.compile(
+            "\"textures\"\\s*:\\s*\\{([^}]*)\\}",
+            Pattern.CASE_INSENSITIVE | Pattern.DOTALL
+    );
+
+    private static final Pattern TEXTURE_ENTRY = Pattern.compile(
+            "\"([^\"]+)\"\\s*:\\s*\"((?:\\\\.|[^\"\\\\])*)\"",
+            Pattern.DOTALL
+    );
 
     public static final class ResolvedAsset {
 
@@ -125,9 +137,28 @@ public final class ItemsAdderAssetResolver {
 
                     if (matches.isEmpty()) {
                         resolved.missingReferences.add(resultKey);
-                    } else {
-                        resolved.resolvedFiles.put(resultKey, matches);
-                        result.resolvedFiles += matches.size();
+                        continue;
+                    }
+
+                    resolved.resolvedFiles.put(resultKey, matches);
+                    result.resolvedFiles += matches.size();
+
+                    /*
+                     * Model JSON tidak hanya disimpan sebagai file model.
+                     * Bagian textures di dalamnya juga dibaca agar PNG
+                     * yang digunakan model dapat ditemukan otomatis.
+                     */
+                    if (isModelProperty(property)) {
+                        for (File modelFile : matches) {
+                            resolveModelTextures(
+                                    modelFile,
+                                    reference,
+                                    asset.getNamespace(),
+                                    index,
+                                    resolved,
+                                    result
+                            );
+                        }
                     }
                 }
             }
@@ -137,6 +168,82 @@ public final class ItemsAdderAssetResolver {
         }
 
         return result;
+    }
+
+    private void resolveModelTextures(
+            File modelFile,
+            String modelReference,
+            String assetNamespace,
+            FileIndex index,
+            ResolvedAsset resolved,
+            ResolutionResult result
+    ) {
+        if (modelFile == null || !modelFile.isFile()) {
+            return;
+        }
+
+        final String json;
+
+        try {
+            json = Files.readString(modelFile.toPath());
+        } catch (IOException exception) {
+            resolved.missingReferences.add(
+                    "model_read:" + modelReference + ":" + modelFile.getName()
+            );
+            return;
+        }
+
+        Matcher blockMatcher = TEXTURES_BLOCK.matcher(json);
+        int blockIndex = 0;
+
+        while (blockMatcher.find()) {
+            blockIndex++;
+
+            String textureBlock = blockMatcher.group(1);
+            Matcher entryMatcher = TEXTURE_ENTRY.matcher(textureBlock);
+
+            while (entryMatcher.find()) {
+                String textureKey = entryMatcher.group(1).trim();
+                String textureReference = unescapeJson(entryMatcher.group(2).trim());
+
+                if (textureReference.isBlank()
+                        || textureReference.startsWith("#")
+                        || textureReference.equalsIgnoreCase("null")) {
+                    continue;
+                }
+
+                List<File> textureFiles = findFiles(
+                        textureReference,
+                        assetNamespace,
+                        index,
+                        "texture"
+                );
+
+                String resultKey = "model_texture:"
+                        + modelReference
+                        + ":"
+                        + blockIndex
+                        + ":"
+                        + textureKey
+                        + ":"
+                        + textureReference;
+
+                if (textureFiles.isEmpty()) {
+                    resolved.missingReferences.add(resultKey);
+                    continue;
+                }
+
+                resolved.resolvedFiles.put(resultKey, textureFiles);
+                result.resolvedFiles += textureFiles.size();
+            }
+        }
+    }
+
+    private String unescapeJson(String value) {
+        return value
+                .replace("\\/", "/")
+                .replace("\\\\", "\\")
+                .replace("\\\"", "\"");
     }
 
     private FileIndex buildFileIndex(
@@ -196,6 +303,14 @@ public final class ItemsAdderAssetResolver {
                 || key.contains("animation")
                 || key.endsWith("_file")
                 || key.endsWith("_path");
+    }
+
+    private boolean isModelProperty(String property) {
+        return property.equals("model")
+                || property.endsWith(".model")
+                || property.contains("model_path")
+                || property.contains("model_file")
+                || property.contains("item_model");
     }
 
     private List<String> splitReferences(String value) {
@@ -266,7 +381,7 @@ public final class ItemsAdderAssetResolver {
                 ? referenceNamespace
                 : namespace;
 
-        // 1. Cari berdasarkan jalur lengkap.
+        // 1. Pencarian jalur lengkap.
         for (String candidate : candidates) {
             List<File> matches = index.findExact(
                     candidate,
@@ -278,7 +393,7 @@ public final class ItemsAdderAssetResolver {
             }
         }
 
-        // 2. Cari berdasarkan akhiran jalur dalam namespace.
+        // 2. Pencarian akhiran jalur dalam namespace.
         for (String candidate : candidates) {
             List<File> matches = index.findSuffix(
                     candidate,
@@ -290,8 +405,7 @@ public final class ItemsAdderAssetResolver {
             }
         }
 
-        // 3. Cari berdasarkan nama file dalam namespace.
-        // Hanya menerima hasil jika nama file tersebut unik.
+        // 3. Pencarian basename dalam namespace jika unik.
         for (String candidate : candidates) {
             String basename = getBasename(candidate);
 
@@ -309,7 +423,7 @@ public final class ItemsAdderAssetResolver {
             }
         }
 
-        // 4. Pencarian global hanya jika hasilnya benar-benar unik.
+        // 4. Pencarian global hanya jika hasilnya unik.
         for (String candidate : candidates) {
             List<File> matches = index.findGlobalSuffix(candidate);
 
