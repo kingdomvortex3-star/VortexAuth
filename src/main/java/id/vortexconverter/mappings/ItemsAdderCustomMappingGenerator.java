@@ -61,8 +61,10 @@ public class ItemsAdderCustomMappingGenerator {
             );
 
             if (javaIdentifier == null) {
-                skipped.add(asset.getNamespacedId()
-                        + ": Java item identifier tidak valid atau tidak ditemukan.");
+                skipped.add(
+                        asset.getNamespacedId()
+                                + ": Java item identifier tidak valid atau tidak ditemukan."
+                );
                 continue;
             }
 
@@ -71,8 +73,10 @@ public class ItemsAdderCustomMappingGenerator {
 
             if (customModelDataText == null
                     || customModelDataText.isBlank()) {
-                skipped.add(asset.getNamespacedId()
-                        + ": Custom Model Data tidak ditemukan.");
+                skipped.add(
+                        asset.getNamespacedId()
+                                + ": Custom Model Data tidak ditemukan."
+                );
                 continue;
             }
 
@@ -83,17 +87,21 @@ public class ItemsAdderCustomMappingGenerator {
                         customModelDataText.trim()
                 );
             } catch (NumberFormatException exception) {
-                skipped.add(asset.getNamespacedId()
-                        + ": Custom Model Data tidak valid: "
-                        + customModelDataText);
+                skipped.add(
+                        asset.getNamespacedId()
+                                + ": Custom Model Data tidak valid: "
+                                + customModelDataText
+                );
                 continue;
             }
 
             if (!Float.isFinite(customModelData)
                     || customModelData < 0) {
-                skipped.add(asset.getNamespacedId()
-                        + ": Custom Model Data harus berupa angka "
-                        + "positif atau nol.");
+                skipped.add(
+                        asset.getNamespacedId()
+                                + ": Custom Model Data harus berupa angka "
+                                + "positif atau nol."
+                );
                 continue;
             }
 
@@ -114,16 +122,20 @@ public class ItemsAdderCustomMappingGenerator {
             );
 
             if (!isValidBedrockIdentifier(bedrockIdentifier)) {
-                skipped.add(asset.getNamespacedId()
-                        + ": Bedrock identifier tidak valid: "
-                        + bedrockIdentifier);
+                skipped.add(
+                        asset.getNamespacedId()
+                                + ": Bedrock identifier tidak valid: "
+                                + bedrockIdentifier
+                );
                 continue;
             }
 
             if (bedrockIdentifier.startsWith("minecraft:")) {
-                skipped.add(asset.getNamespacedId()
-                        + ": Namespace minecraft tidak diperbolehkan "
-                        + "untuk custom Bedrock identifier.");
+                skipped.add(
+                        asset.getNamespacedId()
+                                + ": Namespace minecraft tidak diperbolehkan "
+                                + "untuk custom Bedrock identifier."
+                );
                 continue;
             }
 
@@ -131,18 +143,21 @@ public class ItemsAdderCustomMappingGenerator {
                     + "#"
                     + Float.toString(customModelData);
 
-            if (registeredMappings.contains(mappingKey)) {
-                skipped.add(asset.getNamespacedId()
-                        + ": Java item dan Custom Model Data duplikat: "
-                        + mappingKey);
+            if (!registeredMappings.add(mappingKey)) {
+                skipped.add(
+                        asset.getNamespacedId()
+                                + ": Java item dan Custom Model Data duplikat: "
+                                + mappingKey
+                );
                 continue;
             }
 
-            if (registeredBedrockIdentifiers.contains(
-                    bedrockIdentifier)) {
-                skipped.add(asset.getNamespacedId()
-                        + ": Bedrock identifier sudah digunakan: "
-                        + bedrockIdentifier);
+            if (!registeredBedrockIdentifiers.add(bedrockIdentifier)) {
+                skipped.add(
+                        asset.getNamespacedId()
+                                + ": Bedrock identifier sudah digunakan: "
+                                + bedrockIdentifier
+                );
                 continue;
             }
 
@@ -188,9 +203,6 @@ public class ItemsAdderCustomMappingGenerator {
 
             definitions.add(definition);
 
-            registeredMappings.add(mappingKey);
-            registeredBedrockIdentifiers.add(bedrockIdentifier);
-
             generatedMappings++;
         }
 
@@ -210,6 +222,10 @@ public class ItemsAdderCustomMappingGenerator {
         warnings.add(
                 "Setiap pasangan Java item dan Custom Model Data "
                         + "hanya didaftarkan satu kali."
+        );
+
+        warnings.add(
+                "Bedrock identifier mendukung slash pada bagian path."
         );
 
         warnings.add(
@@ -293,9 +309,16 @@ public class ItemsAdderCustomMappingGenerator {
 
         String[] parts = identifier.split(":", -1);
 
-        return parts.length == 2
-                && isValidIdentifierPart(parts[0])
-                && isValidIdentifierPart(parts[1]);
+        if (parts.length != 2) {
+            return false;
+        }
+
+        String namespace = parts[0];
+        String path = parts[1];
+
+        return !namespace.equals("minecraft")
+                && namespace.matches("[a-z0-9_.-]+")
+                && path.matches("[a-z0-9_./-]+");
     }
 
     private boolean isValidIdentifierPart(String value) {
