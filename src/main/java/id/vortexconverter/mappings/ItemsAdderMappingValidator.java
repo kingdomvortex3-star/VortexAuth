@@ -44,12 +44,7 @@ public class ItemsAdderMappingValidator {
         if (mapping == null) {
             errors.add("Mapping JSON tidak tersedia.");
 
-            return new ValidationResult(
-                    false,
-                    0,
-                    errors,
-                    warnings
-            );
+            return new ValidationResult(false, 0, errors, warnings);
         }
 
         JsonElement formatVersion = mapping.get("format_version");
@@ -79,26 +74,14 @@ public class ItemsAdderMappingValidator {
 
         if (itemsElement == null || !itemsElement.isJsonObject()) {
             errors.add("Bagian items harus berupa JSON object.");
-
-            return new ValidationResult(
-                    false,
-                    0,
-                    errors,
-                    warnings
-            );
+            return new ValidationResult(false, 0, errors, warnings);
         }
 
         JsonObject items = itemsElement.getAsJsonObject();
 
         if (items.size() == 0) {
             errors.add("Tidak ada item mapping yang ditemukan.");
-
-            return new ValidationResult(
-                    false,
-                    0,
-                    errors,
-                    warnings
-            );
+            return new ValidationResult(false, 0, errors, warnings);
         }
 
         int validDefinitions = 0;
@@ -131,8 +114,7 @@ public class ItemsAdderMappingValidator {
 
             if (definitions.isEmpty()) {
                 errors.add(
-                        javaIdentifier
-                                + ": array definitions kosong."
+                        javaIdentifier + ": array definitions kosong."
                 );
                 continue;
             }
@@ -151,7 +133,8 @@ public class ItemsAdderMappingValidator {
                     continue;
                 }
 
-                JsonObject definition = definitionElement.getAsJsonObject();
+                JsonObject definition =
+                        definitionElement.getAsJsonObject();
 
                 if (validateLegacyDefinition(
                         javaIdentifier,
@@ -361,16 +344,15 @@ public class ItemsAdderMappingValidator {
         JsonElement displayName = definition.get("display_name");
 
         if (displayName != null
-                && (!displayName.isJsonPrimitive()
-                || !displayName.getAsJsonPrimitive().isString())) {
+                && !isValidDisplayName(displayName)) {
             errors.add(
                     prefix
-                            + ": display_name harus berupa string."
+                            + ": display_name harus berupa string "
+                            + "atau JSON object text component."
             );
             return false;
         }
 
-        // Registrasi dilakukan setelah seluruh validasi berhasil.
         registeredMappings.add(mappingKey);
         registeredBedrockIdentifiers.add(bedrockIdentifier);
 
@@ -381,6 +363,18 @@ public class ItemsAdderMappingValidator {
         );
 
         return true;
+    }
+
+    private boolean isValidDisplayName(JsonElement displayName) {
+        if (displayName == null || displayName.isJsonNull()) {
+            return false;
+        }
+
+        if (displayName.isJsonPrimitive()) {
+            return displayName.getAsJsonPrimitive().isString();
+        }
+
+        return displayName.isJsonObject();
     }
 
     private String toIconKey(String identifier) {
