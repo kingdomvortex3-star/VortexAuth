@@ -6,6 +6,7 @@ import com.google.gson.GsonBuilder;
 import com.google.gson.JsonArray;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
+import com.google.gson.JsonParser;
 
 import id.vortexconverter.mappings.ItemsAdderCustomMappingGenerator;
 import id.vortexconverter.scanner.ItemsAdderAssetResolver;
@@ -25,9 +26,11 @@ import java.nio.file.StandardCopyOption;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Set;
 import java.util.UUID;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipOutputStream;
@@ -36,6 +39,10 @@ public class ItemsAdderBedrockResourcePackBuilder {
 
     private static final Gson GSON =
             new GsonBuilder().setPrettyPrinting().create();
+
+    private static final int MAX_PARENT_DEPTH = 32;
+
+    private static final String PARENT_KEY_PREFIX = "models:parent:";
 
     private final ItemsAdderAssetResolver assetResolver =
             new ItemsAdderAssetResolver();
@@ -52,7 +59,6 @@ public class ItemsAdderBedrockResourcePackBuilder {
             ItemsAdderConfigParser.ParseResult parseResult,
             ItemsAdderCustomMappingGenerator.MappingResult mappingResult
     ) throws IOException {
-
         return buildFromSource(
                 itemsAdderContents,
                 null,
@@ -168,6 +174,7 @@ public class ItemsAdderBedrockResourcePackBuilder {
         int discoveredItems = 0;
         int copiedTextures = 0;
         int uvIconsGenerated = 0;
+        int inheritedModelsUsed = 0;
 
         for (ItemsAdderConfigParser.AssetInfo asset
                 : parseResult.getAssets()) {
@@ -304,14 +311,19 @@ public class ItemsAdderBedrockResourcePackBuilder {
             );
 
             boolean uvGenerated = false;
+            boolean inheritedModelUsed = false;
 
             try {
-                uvGenerated = createUvIcon(
+                UvIconResult uvResult = createUvIcon(
                         resolvedAsset,
                         destination,
                         warnings,
                         asset.getNamespacedId()
                 );
+
+                uvGenerated = uvResult.generated();
+                inheritedModelUsed = uvResult.inheritedModelUsed();
+
             } catch (Exception exception) {
                 warnings.add(
                         asset.getNamespacedId()
@@ -328,6 +340,10 @@ public class ItemsAdderBedrockResourcePackBuilder {
                 );
             } else {
                 uvIconsGenerated++;
+            }
+
+            if (inheritedModelUsed) {
+                inheritedModelsUsed++;
             }
 
             JsonObject textureEntry = new JsonObject();
@@ -455,6 +471,11 @@ public class ItemsAdderBedrockResourcePackBuilder {
         );
 
         warnings.add(
+                "Model yang menggunakan data parent: "
+                        + inheritedModelsUsed + "."
+        );
+
+        warnings.add(
                 "Mapping telah disinkronkan dengan tekstur yang berhasil dibuat."
         );
 
@@ -480,7 +501,7 @@ public class ItemsAdderBedrockResourcePackBuilder {
         );
     }
 
-    private boolean createUvIcon(
+    private UvIconResult createUvIcon(
             ItemsAdderAssetResolver.ResolvedAsset resolvedAsset,
             File destination,
             List<String> warnings,
@@ -490,14 +511,53 @@ public class ItemsAdderBedrockResourcePackBuilder {
         File modelFile = findResolvedModel(resolvedAsset);
 
         if (modelFile == null) {
-            return false;
+            return new UvIconResult(false, false);
         }
 
-        ItemsAdderModelParser.ModelData model =
-                modelParser.parse(modelFile);
+        String rootModelReference = findRootModelReference(
+                resolvedAsset,
+                modelFile
+        );
+
+        JsonObject mergedRoot = mergeResolvedModelHierarchy(
+                resolvedAsset,
+                modelFile,
+                rootModelReference,
+                new LinkedHashSet<>(),
+                0,
+                warnings,
+                assetName
+        );
+
+        if (mergedRoot == null) {
+            return new UvIconResult(false, false);
+        }
+
+        File temporaryModel = new File(
+                destination.getParentFile(),
+                ".vortex-model-" + UUID.randomUUID() + ".json"
+        );
+
+        ItemsAdderModelParser.ModelData model;
+
+        try {
+            Files.writeString(
+                    temporaryModel.toPath(),
+                    GSON.toJson(mergedRoot),
+                    StandardCharsets.UTF_8
+            );
+
+            model = modelParser.parse(temporaryModel);
+        } finally {
+            Files.deleteIfExists(temporaryModel.toPath());
+        }
 
         if (!model.hasElements()) {
-            return false;
+            warnings.add(
+                    assetName
+                            + ": model dan parent tidak memiliki geometry elements."
+            );
+            return new UvIconResult(false, false);
         }
 
         ItemsAdderModelParser.FaceData selectedFace = null;
@@ -523,7 +583,7 @@ public class ItemsAdderBedrockResourcePackBuilder {
                     assetName
                             + ": model tidak memiliki UV eksplisit yang dapat dipotong."
             );
-            return false;
+            return new UvIconResult(false, false);
         }
 
         File textureFile = findFaceTexture(
@@ -537,7 +597,7 @@ public class ItemsAdderBedrockResourcePackBuilder {
                     assetName
                             + ": tekstur face UV tidak ditemukan."
             );
-            return false;
+            return new UvIconResult(false, false);
         }
 
         BufferedImage source = ImageIO.read(textureFile);
@@ -547,20 +607,17 @@ public class ItemsAdderBedrockResourcePackBuilder {
                     assetName
                             + ": file tekstur bukan PNG yang dapat dibaca."
             );
-            return false;
+            return new UvIconResult(false, false);
         }
 
-        BufferedImage cropped = cropUv(
-                source,
-                selectedFace
-        );
+        BufferedImage cropped = cropUv(source, selectedFace);
 
         if (cropped == null) {
             warnings.add(
                     assetName
                             + ": koordinat UV berada di luar tekstur."
             );
-            return false;
+            return new UvIconResult(false, false);
         }
 
         BufferedImage rotated = rotateTexture(
@@ -578,7 +635,237 @@ public class ItemsAdderBedrockResourcePackBuilder {
             throw new IOException("Tidak ada PNG image writer.");
         }
 
-        return true;
+        return new UvIconResult(
+                true,
+                mergedRoot.has("vortexconverter_parent_inherited")
+                        && mergedRoot.get("vortexconverter_parent_inherited")
+                        .getAsBoolean()
+        );
+    }
+
+    private JsonObject mergeResolvedModelHierarchy(
+            ItemsAdderAssetResolver.ResolvedAsset resolvedAsset,
+            File modelFile,
+            String rootModelReference,
+            Set<String> visited,
+            int depth,
+            List<String> warnings,
+            String assetName
+    ) throws IOException {
+
+        if (modelFile == null || !modelFile.isFile()) {
+            return null;
+        }
+
+        if (depth >= MAX_PARENT_DEPTH) {
+            warnings.add(
+                    assetName + ": batas kedalaman parent model tercapai."
+            );
+            return null;
+        }
+
+        String identity = normalizeFileIdentity(modelFile);
+
+        if (!visited.add(identity)) {
+            warnings.add(
+                    assetName + ": circular parent model terdeteksi."
+            );
+            return null;
+        }
+
+        try {
+            JsonElement element = JsonParser.parseString(
+                    Files.readString(modelFile.toPath())
+            );
+
+            if (!element.isJsonObject()) {
+                throw new IOException(
+                        "Model JSON bukan object: " + modelFile.getName()
+                );
+            }
+
+            JsonObject child = element.getAsJsonObject().deepCopy();
+            JsonObject merged = new JsonObject();
+
+            boolean inherited = false;
+            String parentReference = getJsonString(child, "parent");
+
+            if (parentReference != null
+                    && !parentReference.isBlank()
+                    && !parentReference.startsWith("minecraft:")) {
+
+                String parentKey = PARENT_KEY_PREFIX
+                        + rootModelReference
+                        + ":"
+                        + parentReference;
+
+                List<File> parentFiles = resolvedAsset
+                        .getResolvedFiles()
+                        .get(parentKey);
+
+                if (parentFiles != null && !parentFiles.isEmpty()) {
+                    File parentFile = firstJson(parentFiles);
+
+                    if (parentFile != null) {
+                        JsonObject parent = mergeResolvedModelHierarchy(
+                                resolvedAsset,
+                                parentFile,
+                                rootModelReference,
+                                visited,
+                                depth + 1,
+                                warnings,
+                                assetName
+                        );
+
+                        if (parent != null) {
+                            merged = parent;
+                            inherited = true;
+                        }
+                    }
+                } else {
+                    warnings.add(
+                            assetName
+                                    + ": file parent tidak tersedia di Resolver: "
+                                    + parentReference
+                    );
+                }
+            }
+
+            JsonObject mergedTextures = new JsonObject();
+
+            if (merged.has("textures")
+                    && merged.get("textures").isJsonObject()) {
+                mergedTextures = merged.getAsJsonObject("textures")
+                        .deepCopy();
+            }
+
+            if (child.has("textures")
+                    && child.get("textures").isJsonObject()) {
+                for (Map.Entry<String, JsonElement> entry
+                        : child.getAsJsonObject("textures").entrySet()) {
+                    mergedTextures.add(
+                            entry.getKey(),
+                            entry.getValue().deepCopy()
+                    );
+                }
+            }
+
+            if (!mergedTextures.isEmpty()) {
+                merged.add("textures", mergedTextures);
+            }
+
+            if (child.has("elements")
+                    && child.get("elements").isJsonArray()) {
+                merged.add(
+                        "elements",
+                        child.getAsJsonArray("elements").deepCopy()
+                );
+            }
+
+            for (Map.Entry<String, JsonElement> entry
+                    : child.entrySet()) {
+
+                String key = entry.getKey();
+
+                if (key.equals("parent")
+                        || key.equals("textures")
+                        || key.equals("elements")) {
+                    continue;
+                }
+
+                merged.add(key, entry.getValue().deepCopy());
+            }
+
+            merged.remove("parent");
+            merged.addProperty(
+                    "vortexconverter_parent_inherited",
+                    inherited
+            );
+
+            return merged;
+
+        } finally {
+            visited.remove(identity);
+        }
+    }
+
+    private String findRootModelReference(
+            ItemsAdderAssetResolver.ResolvedAsset resolvedAsset,
+            File modelFile
+    ) {
+        for (Map.Entry<String, List<File>> entry
+                : resolvedAsset.getResolvedFiles().entrySet()) {
+
+            String key = entry.getKey();
+            String property = getPropertyName(key);
+
+            if (!isModelProperty(property)) {
+                continue;
+            }
+
+            for (File file : entry.getValue()) {
+                if (file != null
+                        && normalizeFileIdentity(file).equals(
+                                normalizeFileIdentity(modelFile)
+                        )) {
+                    int separator = key.indexOf(':');
+
+                    if (separator >= 0 && separator + 1 < key.length()) {
+                        return key.substring(separator + 1);
+                    }
+                }
+            }
+        }
+
+        return modelFile.getName().replaceFirst(
+                "(?i)\\.json$",
+                ""
+        );
+    }
+
+    private File firstJson(List<File> files) {
+        for (File file : files) {
+            if (file != null
+                    && file.isFile()
+                    && file.getName().toLowerCase(Locale.ROOT)
+                    .endsWith(".json")) {
+                return file;
+            }
+        }
+
+        return null;
+    }
+
+    private String normalizeFileIdentity(File file) {
+        try {
+            return file.toPath().toRealPath()
+                    .toString().toLowerCase(Locale.ROOT);
+        } catch (IOException exception) {
+            return file.getAbsolutePath()
+                    .toLowerCase(Locale.ROOT);
+        }
+    }
+
+    private String getJsonString(JsonObject object, String key) {
+        if (object == null || !object.has(key)) {
+            return null;
+        }
+
+        JsonElement value = object.get(key);
+
+        if (value == null
+                || !value.isJsonPrimitive()
+                || !value.getAsJsonPrimitive().isString()) {
+            return null;
+        }
+
+        return value.getAsString().trim();
+    }
+
+    private record UvIconResult(
+            boolean generated,
+            boolean inheritedModelUsed
+    ) {
     }
 
     private File findResolvedModel(
@@ -589,7 +876,8 @@ public class ItemsAdderBedrockResourcePackBuilder {
 
             String key = entry.getKey().toLowerCase(Locale.ROOT);
 
-            if (key.startsWith("textures:model_texture:")) {
+            if (key.startsWith("textures:model_texture:")
+                    || key.startsWith(PARENT_KEY_PREFIX)) {
                 continue;
             }
 
