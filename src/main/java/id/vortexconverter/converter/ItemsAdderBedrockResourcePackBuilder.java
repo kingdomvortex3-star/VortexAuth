@@ -40,10 +40,6 @@ public class ItemsAdderBedrockResourcePackBuilder {
     private final ItemsAdderZipExtractor zipExtractor =
             new ItemsAdderZipExtractor();
 
-    /**
-     * Metode lama tetap dipertahankan agar service versi sebelumnya
-     * tetap dapat dikompilasi selama migrasi ZIP dilakukan bertahap.
-     */
     public PackResult build(
             File itemsAdderContents,
             File geyserDataDirectory,
@@ -60,11 +56,6 @@ public class ItemsAdderBedrockResourcePackBuilder {
         );
     }
 
-    /**
-     * Metode baru:
-     * - Metadata item tetap berasal dari parser YAML.
-     * - Model dan tekstur berasal dari generated.zip.
-     */
     public PackResult build(
             File itemsAdderContents,
             File generatedZip,
@@ -98,15 +89,11 @@ public class ItemsAdderBedrockResourcePackBuilder {
 
         if (itemsAdderContents == null
                 || !itemsAdderContents.isDirectory()) {
-            throw new IOException(
-                    "ItemsAdder contents tidak ditemukan."
-            );
+            throw new IOException("ItemsAdder contents tidak ditemukan.");
         }
 
         if (geyserDataDirectory == null) {
-            throw new IOException(
-                    "Folder data Geyser tidak ditemukan."
-            );
+            throw new IOException("Folder data Geyser tidak ditemukan.");
         }
 
         if (parseResult == null || mappingResult == null
@@ -116,17 +103,11 @@ public class ItemsAdderBedrockResourcePackBuilder {
             );
         }
 
-        File packsDirectory = new File(
-                geyserDataDirectory,
-                "packs"
-        );
-
+        File packsDirectory = new File(geyserDataDirectory, "packs");
         Files.createDirectories(packsDirectory.toPath());
 
         if (!packsDirectory.isDirectory()) {
-            throw new IOException(
-                    "Folder Geyser packs tidak tersedia."
-            );
+            throw new IOException("Folder Geyser packs tidak tersedia.");
         }
 
         File workingDirectory = new File(
@@ -142,55 +123,38 @@ public class ItemsAdderBedrockResourcePackBuilder {
 
         Files.createDirectories(workingPath);
 
-        File sourceDirectory;
         boolean zipMode = generatedZip != null;
+        File sourceDirectory;
 
         if (zipMode) {
-            Path extractedPath = zipExtractor.extract(
+            sourceDirectory = zipExtractor.extract(
                     generatedZip,
                     workingPath.resolve("source")
-            );
-
-            sourceDirectory = extractedPath.toFile();
+            ).toFile();
         } else {
-            // Mode lama hanya untuk kompatibilitas sementara.
             sourceDirectory = itemsAdderContents;
         }
 
-        File packRoot = new File(
-                workingDirectory,
-                "bedrock_pack"
-        );
-
-        File texturesDirectory = new File(
-                packRoot,
-                "textures/items"
-        );
+        File packRoot = new File(workingDirectory, "bedrock_pack");
+        File texturesDirectory = new File(packRoot, "textures/items");
 
         Files.createDirectories(texturesDirectory.toPath());
 
         ItemsAdderAssetResolver.ResolutionResult resolution =
-                assetResolver.resolve(
-                        parseResult,
-                        sourceDirectory
-                );
+                assetResolver.resolve(parseResult, sourceDirectory);
 
         List<String> warnings = new ArrayList<>();
         List<String> skipped = new ArrayList<>();
 
-        JsonObject items = mappingResult.mapping()
-                .getAsJsonObject("items");
+        JsonObject items = mappingResult.mapping().getAsJsonObject("items");
 
         if (items == null) {
-            throw new IOException(
-                    "Mapping tidak memiliki objek items."
-            );
+            throw new IOException("Mapping tidak memiliki objek items.");
         }
 
         JsonObject textureData = new JsonObject();
 
-        Map<String, String> generatedIdentifiers =
-                new LinkedHashMap<>();
+        Map<String, String> generatedIdentifiers = new LinkedHashMap<>();
 
         int discoveredItems = 0;
         int copiedTextures = 0;
@@ -235,8 +199,7 @@ public class ItemsAdderBedrockResourcePackBuilder {
                 continue;
             }
 
-            String assetCmdValue =
-                    asset.getCustomModelDataValue();
+            String assetCmdValue = asset.getCustomModelDataValue();
 
             if (assetCmdValue == null) {
                 skipped.add(
@@ -339,11 +302,9 @@ public class ItemsAdderBedrockResourcePackBuilder {
             JsonObject textureEntry = new JsonObject();
             JsonArray texturePaths = new JsonArray();
 
-            texturePaths.add(
-                    "textures/items/" + atlasKey
-            );
-
+            texturePaths.add("textures/items/" + atlasKey);
             textureEntry.add("textures", texturePaths);
+
             textureData.add(atlasKey, textureEntry);
 
             generatedIdentifiers.put(
@@ -379,10 +340,7 @@ public class ItemsAdderBedrockResourcePackBuilder {
                 "atlas.items"
         );
 
-        textureAtlas.add(
-                "texture_data",
-                textureData
-        );
+        textureAtlas.add("texture_data", textureData);
 
         writeJson(
                 new File(packRoot, "textures/item_texture.json"),
@@ -442,8 +400,8 @@ public class ItemsAdderBedrockResourcePackBuilder {
         );
 
         warnings.add(
-                "Builder mengambil PNG dari properti tekstur "
-                        + "dan tekstur yang ditemukan melalui model JSON."
+                "Pemilihan tekstur memprioritaskan konfigurasi langsung, "
+                        + "kemudian layer0, particle, dan tekstur model lainnya."
         );
 
         warnings.add(
@@ -556,44 +514,111 @@ public class ItemsAdderBedrockResourcePackBuilder {
     private File findResolvedTexture(
             ItemsAdderAssetResolver.ResolvedAsset resolvedAsset
     ) {
+        Map<String, List<File>> files =
+                resolvedAsset.getResolvedFiles();
 
-        for (Map.Entry<String, List<File>> entry
-                : resolvedAsset.getResolvedFiles().entrySet()) {
-
+        // Prioritas 1: tekstur langsung dari YAML ItemsAdder.
+        for (Map.Entry<String, List<File>> entry : files.entrySet()) {
             String key = entry.getKey();
-            int separator = key.indexOf(':');
 
-            String property = separator >= 0
-                    ? key.substring(0, separator)
-                    : key;
+            if (key.startsWith("textures:model_texture:")) {
+                continue;
+            }
 
-            property = property.toLowerCase(Locale.ROOT);
+            String property = getPropertyName(key);
 
             if (!isTextureProperty(property)) {
                 continue;
             }
 
-            for (File file : entry.getValue()) {
-                if (file == null || !file.isFile()) {
-                    continue;
-                }
+            File file = firstPng(entry.getValue());
 
-                if (file.getName()
-                        .toLowerCase(Locale.ROOT)
-                        .endsWith(".png")) {
-                    return file;
-                }
+            if (file != null) {
+                return file;
+            }
+        }
+
+        // Prioritas 2: layer0 dari model JSON.
+        File layer0 = findModelTexture(files, ":layer0:");
+
+        if (layer0 != null) {
+            return layer0;
+        }
+
+        // Prioritas 3: particle dari model JSON.
+        File particle = findModelTexture(files, ":particle:");
+
+        if (particle != null) {
+            return particle;
+        }
+
+        // Prioritas 4: tekstur model lain sebagai fallback.
+        for (Map.Entry<String, List<File>> entry : files.entrySet()) {
+            if (!entry.getKey().startsWith("textures:model_texture:")) {
+                continue;
+            }
+
+            File file = firstPng(entry.getValue());
+
+            if (file != null) {
+                return file;
             }
         }
 
         return null;
     }
 
+    private File findModelTexture(
+            Map<String, List<File>> files,
+            String textureKey
+    ) {
+        for (Map.Entry<String, List<File>> entry : files.entrySet()) {
+            String key = entry.getKey().toLowerCase(Locale.ROOT);
+
+            if (!key.startsWith("textures:model_texture:")
+                    || !key.contains(textureKey)) {
+                continue;
+            }
+
+            File file = firstPng(entry.getValue());
+
+            if (file != null) {
+                return file;
+            }
+        }
+
+        return null;
+    }
+
+    private File firstPng(List<File> files) {
+        for (File file : files) {
+            if (file == null || !file.isFile()) {
+                continue;
+            }
+
+            if (file.getName().toLowerCase(Locale.ROOT).endsWith(".png")) {
+                return file;
+            }
+        }
+
+        return null;
+    }
+
+    private String getPropertyName(String key) {
+        int separator = key.indexOf(':');
+
+        return (separator >= 0
+                ? key.substring(0, separator)
+                : key).toLowerCase(Locale.ROOT);
+    }
+
     private boolean isTextureProperty(String property) {
         return property.equals("texture")
                 || property.equals("textures")
+                || property.equals("icon")
                 || property.endsWith(".texture")
                 || property.endsWith(".textures")
+                || property.endsWith(".icon")
                 || property.contains("texture_path")
                 || property.contains("texture_file");
     }
@@ -637,7 +662,6 @@ public class ItemsAdderBedrockResourcePackBuilder {
         header.add("min_engine_version", versionArray(1, 20, 0));
 
         JsonObject module = new JsonObject();
-
         module.addProperty("type", "resources");
 
         module.addProperty(
@@ -656,10 +680,7 @@ public class ItemsAdderBedrockResourcePackBuilder {
         manifest.add("header", header);
         manifest.add("modules", modules);
 
-        writeJson(
-                new File(directory, "manifest.json"),
-                manifest
-        );
+        writeJson(new File(directory, "manifest.json"), manifest);
     }
 
     private JsonArray versionArray(
