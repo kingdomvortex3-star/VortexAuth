@@ -8,7 +8,6 @@ import com.google.gson.JsonParser;
 
 import java.io.File;
 import java.io.IOException;
-import java.math.BigDecimal;
 import java.nio.file.Files;
 import java.util.ArrayList;
 import java.util.Collections;
@@ -20,13 +19,10 @@ import java.util.Set;
 
 public final class ItemsAdderModelParser {
 
+    private static final int MAX_PARENT_DEPTH = 32;
+
     private static final List<String> FACE_DIRECTIONS = List.of(
-            "north",
-            "south",
-            "east",
-            "west",
-            "up",
-            "down"
+            "north", "south", "east", "west", "up", "down"
     );
 
     public ModelData parse(File modelFile) throws IOException {
@@ -34,46 +30,207 @@ public final class ItemsAdderModelParser {
             throw new IOException("Model JSON tidak ditemukan.");
         }
 
-        JsonElement rootElement;
+        return parseWithInheritance(
+                modelFile,
+                new LinkedHashSet<>(),
+                0
+        );
+    }
+
+    private ModelData parseWithInheritance(
+            File modelFile,
+            Set<String> visited,
+            int depth
+    ) throws IOException {
+
+        if (depth > MAX_PARENT_DEPTH) {
+            throw new IOException(
+                    "Batas kedalaman parent model terlampaui: "
+                            + modelFile.getName()
+            );
+        }
+
+        if (modelFile == null || !modelFile.isFile()) {
+            throw new IOException("Parent model tidak ditemukan.");
+        }
+
+        String canonicalPath = modelFile.getCanonicalPath();
+
+        if (!visited.add(canonicalPath)) {
+            throw new IOException(
+                    "Circular parent model terdeteksi: " + canonicalPath
+            );
+        }
 
         try {
-            rootElement = JsonParser.parseString(
-                    Files.readString(modelFile.toPath())
+            JsonElement rootElement;
+
+            try {
+                rootElement = JsonParser.parseString(
+                        Files.readString(modelFile.toPath())
+                );
+            } catch (Exception exception) {
+                throw new IOException(
+                        "Gagal membaca model JSON: " + modelFile.getName(),
+                        exception
+                );
+            }
+
+            if (!rootElement.isJsonObject()) {
+                throw new IOException(
+                        "Root model harus berupa JSON object."
+                );
+            }
+
+            JsonObject root = rootElement.getAsJsonObject();
+
+            String parent = getString(root, "parent");
+
+            Map<String, String> textures = new LinkedHashMap<>();
+            List<ElementData> elements = new ArrayList<>();
+
+            boolean hasOwnElements = root.has("elements")
+                    && root.get("elements").isJsonArray();
+
+            if (parent != null && !parent.isBlank()
+                    && !parent.startsWith("minecraft:")) {
+
+                File parentFile = resolveParentFile(
+                        modelFile,
+                        parent
+                );
+
+                if (parentFile != null && parentFile.isFile()) {
+                    ModelData parentData = parseWithInheritance(
+                            parentFile,
+                            visited,
+                            depth + 1
+                    );
+
+                    textures.putAll(parentData.textures());
+
+                    if (!hasOwnElements) {
+                        elements.addAll(parentData.elements());
+                    }
+                }
+            }
+
+            textures.putAll(parseTextures(root));
+
+            if (hasOwnElements) {
+                elements = parseElements(root);
+            }
+
+            List<FaceData> faces = new ArrayList<>();
+
+            for (ElementData element : elements) {
+                faces.addAll(element.faces());
+            }
+
+            return new ModelData(
+                    modelFile,
+                    parent,
+                    textures,
+                    elements,
+                    faces,
+                    root.deepCopy()
             );
-        } catch (Exception exception) {
-            throw new IOException(
-                    "Gagal membaca model JSON: " + modelFile.getName(),
-                    exception
+
+        } finally {
+            visited.remove(canonicalPath);
+        }
+    }
+
+    private File resolveParentFile(
+            File childFile,
+            String parentReference
+    ) {
+        if (parentReference == null
+                || parentReference.isBlank()
+                || parentReference.startsWith("minecraft:")) {
+            return null;
+        }
+
+        String reference = parentReference.trim()
+                .replace('\\', '/');
+
+        if (reference.endsWith(".json")) {
+            reference = reference.substring(
+                    0,
+                    reference.length() - 5
             );
         }
 
-        if (!rootElement.isJsonObject()) {
-            throw new IOException(
-                    "Root model harus berupa JSON object."
+        List<File> candidates = new ArrayList<>();
+
+        File childDirectory = childFile.getParentFile();
+
+        if (childDirectory != null) {
+            candidates.add(
+                    new File(childDirectory, reference + ".json")
             );
         }
 
-        JsonObject root = rootElement.getAsJsonObject();
+        int namespaceSeparator = reference.indexOf(':');
 
-        String parent = getString(root, "parent");
+        if (namespaceSeparator >= 0) {
+            String namespace = reference.substring(
+                    0,
+                    namespaceSeparator
+            );
 
-        Map<String, String> textures = parseTextures(root);
-        List<ElementData> elements = parseElements(root);
+            String path = reference.substring(
+                    namespaceSeparator + 1
+            );
 
-        List<FaceData> faces = new ArrayList<>();
+            File modelDirectory = findModelsDirectory(childFile);
 
-        for (ElementData element : elements) {
-            faces.addAll(element.faces());
+            if (modelDirectory != null) {
+                candidates.add(
+                        new File(
+                                modelDirectory,
+                                namespace + "/models/" + path + ".json"
+                        )
+                );
+
+                candidates.add(
+                        new File(
+                                modelDirectory,
+                                namespace + "/" + path + ".json"
+                        )
+                );
+            }
+        } else {
+            File modelsDirectory = findModelsDirectory(childFile);
+
+            if (modelsDirectory != null) {
+                candidates.add(
+                        new File(modelsDirectory, reference + ".json")
+                );
+            }
         }
 
-        return new ModelData(
-                modelFile,
-                parent,
-                textures,
-                elements,
-                faces,
-                root.deepCopy()
-        );
+        for (File candidate : candidates) {
+            if (candidate.isFile()) {
+                return candidate;
+            }
+        }
+
+        return null;
+    }
+
+    private File findModelsDirectory(File file) {
+        File current = file.getParentFile();
+
+        while (current != null) {
+            if (current.getName().equalsIgnoreCase("models")) {
+                return current;
+            }
+
+            current = current.getParentFile();
+        }
+
+        return null;
     }
 
     private Map<String, String> parseTextures(JsonObject root) {
@@ -132,10 +289,7 @@ public final class ItemsAdderModelParser {
                 continue;
             }
 
-            List<FaceData> faces = parseFaces(
-                    object,
-                    index
-            );
+            List<FaceData> faces = parseFaces(object, index);
 
             ElementRotation rotation = parseElementRotation(object);
 
