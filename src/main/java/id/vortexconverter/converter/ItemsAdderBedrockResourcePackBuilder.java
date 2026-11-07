@@ -12,6 +12,9 @@ import id.vortexconverter.scanner.ItemsAdderAssetResolver;
 import id.vortexconverter.scanner.ItemsAdderConfigParser;
 import id.vortexconverter.scanner.ItemsAdderZipExtractor;
 
+import javax.imageio.ImageIO;
+import java.awt.Graphics2D;
+import java.awt.image.BufferedImage;
 import java.io.File;
 import java.io.IOException;
 import java.math.BigDecimal;
@@ -39,6 +42,9 @@ public class ItemsAdderBedrockResourcePackBuilder {
 
     private final ItemsAdderZipExtractor zipExtractor =
             new ItemsAdderZipExtractor();
+
+    private final ItemsAdderModelParser modelParser =
+            new ItemsAdderModelParser();
 
     public PackResult build(
             File itemsAdderContents,
@@ -146,22 +152,22 @@ public class ItemsAdderBedrockResourcePackBuilder {
         List<String> warnings = new ArrayList<>();
         List<String> skipped = new ArrayList<>();
 
-        JsonObject items = mappingResult.mapping().getAsJsonObject("items");
+        JsonObject items =
+                mappingResult.mapping().getAsJsonObject("items");
 
         if (items == null) {
             throw new IOException("Mapping tidak memiliki objek items.");
         }
 
         JsonObject textureData = new JsonObject();
-
-        // Hanya definisi mapping yang berhasil dikonversi
-        // yang akan dimasukkan ke hasil akhir.
         JsonObject filteredItems = new JsonObject();
 
-        Map<String, String> generatedIdentifiers = new LinkedHashMap<>();
+        Map<String, String> generatedIdentifiers =
+                new LinkedHashMap<>();
 
         int discoveredItems = 0;
         int copiedTextures = 0;
+        int uvIconsGenerated = 0;
 
         for (ItemsAdderConfigParser.AssetInfo asset
                 : parseResult.getAssets()) {
@@ -297,11 +303,32 @@ public class ItemsAdderBedrockResourcePackBuilder {
                     atlasKey + ".png"
             );
 
-            Files.copy(
-                    sourceTexture.toPath(),
-                    destination.toPath(),
-                    StandardCopyOption.REPLACE_EXISTING
-            );
+            boolean uvGenerated = false;
+
+            try {
+                uvGenerated = createUvIcon(
+                        resolvedAsset,
+                        destination,
+                        warnings,
+                        asset.getNamespacedId()
+                );
+            } catch (Exception exception) {
+                warnings.add(
+                        asset.getNamespacedId()
+                                + ": ekstraksi UV gagal: "
+                                + exception.getMessage()
+                );
+            }
+
+            if (!uvGenerated) {
+                Files.copy(
+                        sourceTexture.toPath(),
+                        destination.toPath(),
+                        StandardCopyOption.REPLACE_EXISTING
+                );
+            } else {
+                uvIconsGenerated++;
+            }
 
             JsonObject textureEntry = new JsonObject();
             JsonArray texturePaths = new JsonArray();
@@ -316,7 +343,6 @@ public class ItemsAdderBedrockResourcePackBuilder {
                     asset.getNamespacedId()
             );
 
-            // Simpan hanya mapping yang teksturnya berhasil disalin.
             JsonArray retainedDefinitions;
 
             if (filteredItems.has(javaIdentifier)) {
@@ -348,7 +374,6 @@ public class ItemsAdderBedrockResourcePackBuilder {
             );
         }
 
-        // Sinkronkan mapping dengan texture atlas yang benar-benar dibuat.
         mappingResult.mapping().add("items", filteredItems);
 
         JsonObject textureAtlas = new JsonObject();
@@ -423,17 +448,24 @@ public class ItemsAdderBedrockResourcePackBuilder {
         );
 
         warnings.add(
-                "Mapping telah disinkronkan dengan tekstur yang berhasil disalin."
+                "Icon berhasil dibuat: " + copiedTextures
+                        + ", hasil ekstraksi UV: " + uvIconsGenerated
+                        + ", fallback tekstur: "
+                        + (copiedTextures - uvIconsGenerated) + "."
         );
 
         warnings.add(
-                "Pemilihan tekstur memprioritaskan konfigurasi langsung, "
-                        + "kemudian layer0, particle, dan tekstur model lainnya."
+                "Mapping telah disinkronkan dengan tekstur yang berhasil dibuat."
         );
 
         warnings.add(
-                "Model 3D, block, furniture, entity, animasi, "
-                        + "dan suara belum dikonversi."
+                "Ekstraksi UV menggunakan face dengan area UV terbesar. "
+                        + "Ini bukan rendering model 3D lengkap."
+        );
+
+        warnings.add(
+                "Model 3D Bedrock, block, furniture, entity, animasi, "
+                        + "dan suara belum dikonversi secara penuh."
         );
 
         return new PackResult(
@@ -446,6 +478,328 @@ public class ItemsAdderBedrockResourcePackBuilder {
                 workingDirectory,
                 packFile
         );
+    }
+
+    private boolean createUvIcon(
+            ItemsAdderAssetResolver.ResolvedAsset resolvedAsset,
+            File destination,
+            List<String> warnings,
+            String assetName
+    ) throws IOException {
+
+        File modelFile = findResolvedModel(resolvedAsset);
+
+        if (modelFile == null) {
+            return false;
+        }
+
+        ItemsAdderModelParser.ModelData model =
+                modelParser.parse(modelFile);
+
+        if (!model.hasElements()) {
+            return false;
+        }
+
+        ItemsAdderModelParser.FaceData selectedFace = null;
+        double largestArea = -1.0;
+
+        for (ItemsAdderModelParser.FaceData face : model.faces()) {
+            if (!face.hasExplicitUv()) {
+                continue;
+            }
+
+            double width = Math.abs(face.getU2() - face.getU1());
+            double height = Math.abs(face.getV2() - face.getV1());
+            double area = width * height;
+
+            if (area > largestArea) {
+                largestArea = area;
+                selectedFace = face;
+            }
+        }
+
+        if (selectedFace == null || largestArea <= 0) {
+            warnings.add(
+                    assetName
+                            + ": model tidak memiliki UV eksplisit yang dapat dipotong."
+            );
+            return false;
+        }
+
+        File textureFile = findFaceTexture(
+                resolvedAsset,
+                model,
+                selectedFace
+        );
+
+        if (textureFile == null) {
+            warnings.add(
+                    assetName
+                            + ": tekstur face UV tidak ditemukan."
+            );
+            return false;
+        }
+
+        BufferedImage source = ImageIO.read(textureFile);
+
+        if (source == null) {
+            warnings.add(
+                    assetName
+                            + ": file tekstur bukan PNG yang dapat dibaca."
+            );
+            return false;
+        }
+
+        BufferedImage cropped = cropUv(
+                source,
+                selectedFace
+        );
+
+        if (cropped == null) {
+            warnings.add(
+                    assetName
+                            + ": koordinat UV berada di luar tekstur."
+            );
+            return false;
+        }
+
+        BufferedImage rotated = rotateTexture(
+                cropped,
+                selectedFace.rotation()
+        );
+
+        File parent = destination.getParentFile();
+
+        if (parent != null) {
+            Files.createDirectories(parent.toPath());
+        }
+
+        if (!ImageIO.write(rotated, "png", destination)) {
+            throw new IOException("Tidak ada PNG image writer.");
+        }
+
+        return true;
+    }
+
+    private File findResolvedModel(
+            ItemsAdderAssetResolver.ResolvedAsset resolvedAsset
+    ) {
+        for (Map.Entry<String, List<File>> entry
+                : resolvedAsset.getResolvedFiles().entrySet()) {
+
+            String key = entry.getKey().toLowerCase(Locale.ROOT);
+
+            if (key.startsWith("textures:model_texture:")) {
+                continue;
+            }
+
+            String property = getPropertyName(key);
+
+            if (!isModelProperty(property)) {
+                continue;
+            }
+
+            for (File file : entry.getValue()) {
+                if (file != null
+                        && file.isFile()
+                        && file.getName().toLowerCase(Locale.ROOT)
+                        .endsWith(".json")) {
+                    return file;
+                }
+            }
+        }
+
+        return null;
+    }
+
+    private boolean isModelProperty(String property) {
+        return property.equals("model")
+                || property.endsWith(".model")
+                || property.contains("model_path")
+                || property.contains("model_file")
+                || property.contains("item_model");
+    }
+
+    private File findFaceTexture(
+            ItemsAdderAssetResolver.ResolvedAsset resolvedAsset,
+            ItemsAdderModelParser.ModelData model,
+            ItemsAdderModelParser.FaceData face
+    ) {
+        String resolvedReference = modelParser.resolveTexture(
+                face.texture(),
+                model.textures()
+        );
+
+        String textureKey = face.texture();
+
+        if (textureKey.startsWith("#")) {
+            textureKey = textureKey.substring(1);
+        }
+
+        Map<String, List<File>> files =
+                resolvedAsset.getResolvedFiles();
+
+        for (Map.Entry<String, List<File>> entry : files.entrySet()) {
+            String key = entry.getKey().toLowerCase(Locale.ROOT);
+
+            if (!key.startsWith("textures:model_texture:")) {
+                continue;
+            }
+
+            boolean keyMatches = key.contains(
+                    ":" + textureKey.toLowerCase(Locale.ROOT) + ":"
+            );
+
+            boolean referenceMatches = resolvedReference != null
+                    && key.endsWith(
+                            ":" + resolvedReference.toLowerCase(Locale.ROOT)
+                    );
+
+            if (!keyMatches && !referenceMatches) {
+                continue;
+            }
+
+            File png = firstPng(entry.getValue());
+
+            if (png != null) {
+                return png;
+            }
+        }
+
+        if (resolvedReference != null) {
+            String normalizedReference =
+                    resolvedReference.toLowerCase(Locale.ROOT);
+
+            for (Map.Entry<String, List<File>> entry : files.entrySet()) {
+                String key = entry.getKey().toLowerCase(Locale.ROOT);
+
+                if (!key.startsWith("textures:model_texture:")
+                        || !key.endsWith(":" + normalizedReference)) {
+                    continue;
+                }
+
+                File png = firstPng(entry.getValue());
+
+                if (png != null) {
+                    return png;
+                }
+            }
+        }
+
+        return null;
+    }
+
+    private BufferedImage cropUv(
+            BufferedImage source,
+            ItemsAdderModelParser.FaceData face
+    ) {
+        double minU = Math.min(face.getU1(), face.getU2());
+        double maxU = Math.max(face.getU1(), face.getU2());
+        double minV = Math.min(face.getV1(), face.getV2());
+        double maxV = Math.max(face.getV1(), face.getV2());
+
+        int x1 = (int) Math.floor(
+                minU / 16.0 * source.getWidth()
+        );
+
+        int y1 = (int) Math.floor(
+                minV / 16.0 * source.getHeight()
+        );
+
+        int x2 = (int) Math.ceil(
+                maxU / 16.0 * source.getWidth()
+        );
+
+        int y2 = (int) Math.ceil(
+                maxV / 16.0 * source.getHeight()
+        );
+
+        x1 = Math.max(0, Math.min(source.getWidth() - 1, x1));
+        y1 = Math.max(0, Math.min(source.getHeight() - 1, y1));
+        x2 = Math.max(x1 + 1, Math.min(source.getWidth(), x2));
+        y2 = Math.max(y1 + 1, Math.min(source.getHeight(), y2));
+
+        int width = x2 - x1;
+        int height = y2 - y1;
+
+        if (width <= 0 || height <= 0) {
+            return null;
+        }
+
+        return source.getSubimage(x1, y1, width, height);
+    }
+
+    private BufferedImage rotateTexture(
+            BufferedImage source,
+            int rotation
+    ) {
+        int normalized = Math.floorMod(rotation, 360);
+
+        if (normalized == 0) {
+            return copyImage(source);
+        }
+
+        if (normalized != 90
+                && normalized != 180
+                && normalized != 270) {
+            return copyImage(source);
+        }
+
+        int sourceWidth = source.getWidth();
+        int sourceHeight = source.getHeight();
+
+        int targetWidth = normalized == 180
+                ? sourceWidth
+                : sourceHeight;
+
+        int targetHeight = normalized == 180
+                ? sourceHeight
+                : sourceWidth;
+
+        BufferedImage target = new BufferedImage(
+                targetWidth,
+                targetHeight,
+                BufferedImage.TYPE_INT_ARGB
+        );
+
+        Graphics2D graphics = target.createGraphics();
+
+        try {
+            if (normalized == 90) {
+                graphics.translate(targetWidth, 0);
+                graphics.rotate(Math.toRadians(90));
+            } else if (normalized == 180) {
+                graphics.translate(targetWidth, targetHeight);
+                graphics.rotate(Math.toRadians(180));
+            } else {
+                graphics.translate(0, targetHeight);
+                graphics.rotate(Math.toRadians(270));
+            }
+
+            graphics.drawImage(source, 0, 0, null);
+        } finally {
+            graphics.dispose();
+        }
+
+        return target;
+    }
+
+    private BufferedImage copyImage(BufferedImage source) {
+        BufferedImage copy = new BufferedImage(
+                source.getWidth(),
+                source.getHeight(),
+                BufferedImage.TYPE_INT_ARGB
+        );
+
+        Graphics2D graphics = copy.createGraphics();
+
+        try {
+            graphics.drawImage(source, 0, 0, null);
+        } finally {
+            graphics.dispose();
+        }
+
+        return copy;
     }
 
     private JsonObject findMatchingDefinition(
