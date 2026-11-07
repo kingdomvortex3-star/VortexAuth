@@ -21,11 +21,15 @@ import java.util.stream.Stream;
 
 public final class ItemsAdderAssetResolver {
 
+    private static final int MAX_PARENT_DEPTH = 32;
+
     public static final class ResolvedAsset {
 
         private final ItemsAdderConfigParser.AssetInfo asset;
-        private final Map<String, List<File>> resolvedFiles = new LinkedHashMap<>();
-        private final List<String> missingReferences = new ArrayList<>();
+        private final Map<String, List<File>> resolvedFiles =
+                new LinkedHashMap<>();
+        private final List<String> missingReferences =
+                new ArrayList<>();
 
         public ResolvedAsset(ItemsAdderConfigParser.AssetInfo asset) {
             this.asset = asset;
@@ -39,7 +43,12 @@ public final class ItemsAdderAssetResolver {
             Map<String, List<File>> copy = new LinkedHashMap<>();
 
             resolvedFiles.forEach((key, value) ->
-                    copy.put(key, Collections.unmodifiableList(new ArrayList<>(value)))
+                    copy.put(
+                            key,
+                            Collections.unmodifiableList(
+                                    new ArrayList<>(value)
+                            )
+                    )
             );
 
             return Collections.unmodifiableMap(copy);
@@ -50,7 +59,10 @@ public final class ItemsAdderAssetResolver {
         }
 
         public int getResolvedFileCount() {
-            return resolvedFiles.values().stream().mapToInt(List::size).sum();
+            return resolvedFiles.values()
+                    .stream()
+                    .mapToInt(List::size)
+                    .sum();
         }
 
         public boolean hasMissingReferences() {
@@ -61,6 +73,7 @@ public final class ItemsAdderAssetResolver {
     public static final class ResolutionResult {
 
         private final List<ResolvedAsset> assets = new ArrayList<>();
+
         private int scannedFiles;
         private int resolvedFiles;
         private int missingReferences;
@@ -92,7 +105,9 @@ public final class ItemsAdderAssetResolver {
     ) {
         ResolutionResult result = new ResolutionResult();
 
-        if (parsed == null || contentsFolder == null || !contentsFolder.isDirectory()) {
+        if (parsed == null
+                || contentsFolder == null
+                || !contentsFolder.isDirectory()) {
             return result;
         }
 
@@ -102,22 +117,29 @@ public final class ItemsAdderAssetResolver {
             index = buildFileIndex(contentsFolder, result);
         } catch (IOException exception) {
             throw new IllegalStateException(
-                    "Failed to index ItemsAdder assets: " + exception.getMessage(),
+                    "Failed to index ItemsAdder assets: "
+                            + exception.getMessage(),
                     exception
             );
         }
 
-        for (ItemsAdderConfigParser.AssetInfo asset : parsed.getAssets()) {
+        for (ItemsAdderConfigParser.AssetInfo asset
+                : parsed.getAssets()) {
+
             ResolvedAsset resolved = new ResolvedAsset(asset);
 
-            for (Map.Entry<String, String> entry : asset.getProperties().entrySet()) {
-                String property = entry.getKey().toLowerCase(Locale.ROOT);
+            for (Map.Entry<String, String> entry
+                    : asset.getProperties().entrySet()) {
+
+                String property = entry.getKey()
+                        .toLowerCase(Locale.ROOT);
 
                 if (!isAssetReference(property)) {
                     continue;
                 }
 
                 for (String reference : splitReferences(entry.getValue())) {
+
                     List<File> matches = findFiles(
                             reference,
                             asset.getNamespace(),
@@ -125,7 +147,8 @@ public final class ItemsAdderAssetResolver {
                             property
                     );
 
-                    String resultKey = entry.getKey() + ":" + reference;
+                    String resultKey =
+                            entry.getKey() + ":" + reference;
 
                     if (matches.isEmpty()) {
                         resolved.missingReferences.add(resultKey);
@@ -150,7 +173,9 @@ public final class ItemsAdderAssetResolver {
                 }
             }
 
-            result.missingReferences += resolved.missingReferences.size();
+            result.missingReferences +=
+                    resolved.missingReferences.size();
+
             result.assets.add(resolved);
         }
 
@@ -165,94 +190,223 @@ public final class ItemsAdderAssetResolver {
             ResolvedAsset resolved,
             ResolutionResult result
     ) {
+        Map<String, String> inheritedTextures =
+                new LinkedHashMap<>();
+
+        Set<String> visitedModels = new LinkedHashSet<>();
+
+        collectModelTextures(
+                modelFile,
+                modelReference,
+                assetNamespace,
+                index,
+                inheritedTextures,
+                visitedModels,
+                resolved,
+                0
+        );
+
+        for (Map.Entry<String, String> entry
+                : inheritedTextures.entrySet()) {
+
+            String textureKey = entry.getKey();
+            String textureReference = resolveTextureAlias(
+                    entry.getValue(),
+                    inheritedTextures,
+                    new LinkedHashSet<>()
+            );
+
+            if (textureReference == null
+                    || textureReference.isBlank()) {
+
+                resolved.missingReferences.add(
+                        "model_texture_alias:"
+                                + modelReference
+                                + ":"
+                                + textureKey
+                                + ":"
+                                + entry.getValue()
+                );
+
+                continue;
+            }
+
+            if (textureReference.startsWith("#")) {
+                resolved.missingReferences.add(
+                        "model_texture_alias:"
+                                + modelReference
+                                + ":"
+                                + textureKey
+                                + ":"
+                                + textureReference
+                );
+
+                continue;
+            }
+
+            List<File> textureFiles = findFiles(
+                    textureReference,
+                    assetNamespace,
+                    index,
+                    "texture"
+            );
+
+            String resultKey =
+                    "textures:model_texture:"
+                            + modelReference
+                            + ":"
+                            + textureKey
+                            + ":"
+                            + textureReference;
+
+            if (textureFiles.isEmpty()) {
+                if (!containsResolvedKey(resolved, resultKey)) {
+                    resolved.missingReferences.add(resultKey);
+                }
+
+                continue;
+            }
+
+            if (!resolved.resolvedFiles.containsKey(resultKey)) {
+                resolved.resolvedFiles.put(resultKey, textureFiles);
+                result.resolvedFiles += textureFiles.size();
+            }
+        }
+    }
+
+    private void collectModelTextures(
+            File modelFile,
+            String modelReference,
+            String assetNamespace,
+            FileIndex index,
+            Map<String, String> inheritedTextures,
+            Set<String> visitedModels,
+            ResolvedAsset resolved,
+            int depth
+    ) {
         if (modelFile == null || !modelFile.isFile()) {
+            return;
+        }
+
+        if (depth >= MAX_PARENT_DEPTH) {
+            resolved.missingReferences.add(
+                    "model_parent_depth:"
+                            + modelReference
+                            + ":batas kedalaman parent tercapai."
+            );
+            return;
+        }
+
+        String modelIdentity;
+
+        try {
+            modelIdentity = modelFile.toPath()
+                    .toRealPath()
+                    .toString()
+                    .toLowerCase(Locale.ROOT);
+        } catch (IOException exception) {
+            modelIdentity = modelFile.getAbsolutePath()
+                    .toLowerCase(Locale.ROOT);
+        }
+
+        if (!visitedModels.add(modelIdentity)) {
+            resolved.missingReferences.add(
+                    "model_parent_cycle:" + modelReference
+            );
             return;
         }
 
         try {
             String json = Files.readString(modelFile.toPath());
-            JsonElement rootElement = JsonParser.parseString(json);
+
+            JsonElement rootElement =
+                    JsonParser.parseString(json);
 
             if (!rootElement.isJsonObject()) {
+                resolved.missingReferences.add(
+                        "model_invalid_json:" + modelReference
+                );
                 return;
             }
 
             JsonObject root = rootElement.getAsJsonObject();
 
-            if (!root.has("textures") || !root.get("textures").isJsonObject()) {
-                return;
+            // Parent diproses terlebih dahulu.
+            if (root.has("parent")
+                    && root.get("parent").isJsonPrimitive()
+                    && root.getAsJsonPrimitive("parent").isString()) {
+
+                String parentReference =
+                        root.get("parent").getAsString().trim();
+
+                if (!parentReference.isBlank()
+                        && !parentReference.equalsIgnoreCase("null")) {
+
+                    // Parent bawaan Minecraft tidak selalu tersedia
+                    // sebagai file dalam generated.zip.
+                    if (!parentReference.startsWith("minecraft:")) {
+
+                        List<File> parentFiles = findFiles(
+                                parentReference,
+                                assetNamespace,
+                                index,
+                                "model"
+                        );
+
+                        if (parentFiles.isEmpty()) {
+                            resolved.missingReferences.add(
+                                    "model_parent:"
+                                            + modelReference
+                                            + ":"
+                                            + parentReference
+                            );
+                        } else {
+                            for (File parentFile : parentFiles) {
+                                collectModelTextures(
+                                        parentFile,
+                                        parentReference,
+                                        assetNamespace,
+                                        index,
+                                        inheritedTextures,
+                                        visitedModels,
+                                        resolved,
+                                        depth + 1
+                                );
+                            }
+                        }
+                    }
+                }
             }
 
-            JsonObject textures = root.getAsJsonObject("textures");
+            // Texture milik child menggantikan key parent yang sama.
+            if (root.has("textures")
+                    && root.get("textures").isJsonObject()) {
 
-            for (Map.Entry<String, JsonElement> entry : textures.entrySet()) {
-                String textureKey = entry.getKey();
-                JsonElement value = entry.getValue();
+                JsonObject textures =
+                        root.getAsJsonObject("textures");
 
-                if (!value.isJsonPrimitive()
-                        || !value.getAsJsonPrimitive().isString()) {
-                    continue;
-                }
+                for (Map.Entry<String, JsonElement> entry
+                        : textures.entrySet()) {
 
-                String textureReference = value.getAsString().trim();
+                    JsonElement value = entry.getValue();
 
-                if (textureReference.isBlank()
-                        || textureReference.equalsIgnoreCase("null")) {
-                    continue;
-                }
+                    if (!value.isJsonPrimitive()
+                            || !value.getAsJsonPrimitive().isString()) {
+                        continue;
+                    }
 
-                String resolvedReference = resolveTextureAlias(
-                        textureReference,
-                        textures,
-                        new LinkedHashSet<>()
-                );
+                    String textureReference =
+                            value.getAsString().trim();
 
-                if (resolvedReference == null || resolvedReference.isBlank()) {
-                    resolved.missingReferences.add(
-                            "model_texture_alias:"
-                                    + modelReference
-                                    + ":"
-                                    + textureKey
-                                    + ":"
-                                    + textureReference
+                    if (textureReference.isBlank()
+                            || textureReference.equalsIgnoreCase("null")) {
+                        continue;
+                    }
+
+                    inheritedTextures.put(
+                            entry.getKey(),
+                            textureReference
                     );
-                    continue;
-                }
-
-                if (resolvedReference.startsWith("#")) {
-                    resolved.missingReferences.add(
-                            "model_texture_alias:"
-                                    + modelReference
-                                    + ":"
-                                    + textureKey
-                                    + ":"
-                                    + resolvedReference
-                    );
-                    continue;
-                }
-
-                List<File> textureFiles = findFiles(
-                        resolvedReference,
-                        assetNamespace,
-                        index,
-                        "texture"
-                );
-
-                String resultKey = "textures:model_texture:"
-                        + modelReference
-                        + ":"
-                        + textureKey
-                        + ":"
-                        + resolvedReference;
-
-                if (textureFiles.isEmpty()) {
-                    resolved.missingReferences.add(resultKey);
-                    continue;
-                }
-
-                if (!resolved.resolvedFiles.containsKey(resultKey)) {
-                    resolved.resolvedFiles.put(resultKey, textureFiles);
-                    result.resolvedFiles += textureFiles.size();
                 }
             }
 
@@ -265,12 +419,21 @@ public final class ItemsAdderAssetResolver {
                             + ":"
                             + exception.getMessage()
             );
+        } finally {
+            visitedModels.remove(modelIdentity);
         }
+    }
+
+    private boolean containsResolvedKey(
+            ResolvedAsset resolved,
+            String key
+    ) {
+        return resolved.resolvedFiles.containsKey(key);
     }
 
     private String resolveTextureAlias(
             String reference,
-            JsonObject textures,
+            Map<String, String> textures,
             Set<String> visited
     ) {
         if (reference == null) {
@@ -285,19 +448,14 @@ public final class ItemsAdderAssetResolver {
 
         String key = current.substring(1).trim();
 
-        if (key.isBlank() || !visited.add(key) || !textures.has(key)) {
-            return null;
-        }
-
-        JsonElement value = textures.get(key);
-
-        if (!value.isJsonPrimitive()
-                || !value.getAsJsonPrimitive().isString()) {
+        if (key.isBlank()
+                || !visited.add(key)
+                || !textures.containsKey(key)) {
             return null;
         }
 
         return resolveTextureAlias(
-                value.getAsString(),
+                textures.get(key),
                 textures,
                 visited
         );
@@ -312,7 +470,10 @@ public final class ItemsAdderAssetResolver {
         FileIndex index = new FileIndex();
 
         try (Stream<Path> paths = Files.walk(rootPath)) {
-            for (Path path : paths.filter(Files::isRegularFile).toList()) {
+            for (Path path : paths
+                    .filter(Files::isRegularFile)
+                    .toList()) {
+
                 Path realPath = path.toRealPath();
 
                 if (!realPath.startsWith(rootPath)) {
@@ -478,7 +639,8 @@ public final class ItemsAdderAssetResolver {
         }
 
         for (String candidate : candidates) {
-            List<File> matches = index.findGlobalSuffix(candidate);
+            List<File> matches =
+                    index.findGlobalSuffix(candidate);
 
             if (matches.size() == 1) {
                 return matches;
@@ -501,7 +663,9 @@ public final class ItemsAdderAssetResolver {
         String relative = path;
 
         if (relative.startsWith("resourcepack/assets/")) {
-            relative = relative.substring("resourcepack/assets/".length());
+            relative = relative.substring(
+                    "resourcepack/assets/".length()
+            );
         } else if (relative.startsWith("assets/")) {
             relative = relative.substring("assets/".length());
         }
@@ -515,8 +679,17 @@ public final class ItemsAdderAssetResolver {
                     || property.contains("geometry")
                     || property.contains("animation")) {
 
-                addWithExtension(candidates, "models/" + relative, extension);
-                addWithExtension(candidates, "models/item/" + relative, extension);
+                addWithExtension(
+                        candidates,
+                        "models/" + relative,
+                        extension
+                );
+
+                addWithExtension(
+                        candidates,
+                        "models/item/" + relative,
+                        extension
+                );
             }
         }
 
@@ -533,32 +706,71 @@ public final class ItemsAdderAssetResolver {
         addWithExtension(candidates, normalized, extension);
 
         if (normalized.startsWith("textures/")) {
-            String remainder = normalized.substring("textures/".length());
+            String remainder =
+                    normalized.substring("textures/".length());
 
             addWithExtension(candidates, remainder, extension);
-            addWithExtension(candidates, "textures/" + remainder, extension);
+            addWithExtension(
+                    candidates,
+                    "textures/" + remainder,
+                    extension
+            );
             return;
         }
 
         if (normalized.startsWith("item/")) {
-            String remainder = normalized.substring("item/".length());
+            String remainder =
+                    normalized.substring("item/".length());
 
-            addWithExtension(candidates, "textures/item/" + remainder, extension);
-            addWithExtension(candidates, "textures/items/" + remainder, extension);
+            addWithExtension(
+                    candidates,
+                    "textures/item/" + remainder,
+                    extension
+            );
+
+            addWithExtension(
+                    candidates,
+                    "textures/items/" + remainder,
+                    extension
+            );
             return;
         }
 
         if (normalized.startsWith("items/")) {
-            String remainder = normalized.substring("items/".length());
+            String remainder =
+                    normalized.substring("items/".length());
 
-            addWithExtension(candidates, "textures/items/" + remainder, extension);
-            addWithExtension(candidates, "textures/item/" + remainder, extension);
+            addWithExtension(
+                    candidates,
+                    "textures/items/" + remainder,
+                    extension
+            );
+
+            addWithExtension(
+                    candidates,
+                    "textures/item/" + remainder,
+                    extension
+            );
             return;
         }
 
-        addWithExtension(candidates, "textures/" + normalized, extension);
-        addWithExtension(candidates, "textures/item/" + normalized, extension);
-        addWithExtension(candidates, "textures/items/" + normalized, extension);
+        addWithExtension(
+                candidates,
+                "textures/" + normalized,
+                extension
+        );
+
+        addWithExtension(
+                candidates,
+                "textures/item/" + normalized,
+                extension
+        );
+
+        addWithExtension(
+                candidates,
+                "textures/items/" + normalized,
+                extension
+        );
     }
 
     private void addWithExtension(
@@ -615,7 +827,9 @@ public final class ItemsAdderAssetResolver {
 
     private String getBasename(String path) {
         int slash = path.lastIndexOf('/');
-        return slash >= 0 ? path.substring(slash + 1) : path;
+        return slash >= 0
+                ? path.substring(slash + 1)
+                : path;
     }
 
     private boolean hasExtension(String value) {
@@ -626,15 +840,22 @@ public final class ItemsAdderAssetResolver {
 
     private static final class FileIndex {
 
-        private final Map<String, List<File>> byPath = new LinkedHashMap<>();
-        private final Map<String, List<File>> byNamespaceBasename = new LinkedHashMap<>();
+        private final Map<String, List<File>> byPath =
+                new LinkedHashMap<>();
+
+        private final Map<String, List<File>> byNamespaceBasename =
+                new LinkedHashMap<>();
 
         void add(String relativePath, File file) {
             String path = normalize(relativePath);
 
-            byPath.computeIfAbsent(path, ignored -> new ArrayList<>()).add(file);
+            byPath.computeIfAbsent(
+                    path,
+                    ignored -> new ArrayList<>()
+            ).add(file);
 
-            String basename = file.getName().toLowerCase(Locale.ROOT);
+            String basename = file.getName()
+                    .toLowerCase(Locale.ROOT);
 
             for (String namespace : extractNamespaces(path)) {
                 String key = namespace + ":" + basename;
@@ -655,7 +876,8 @@ public final class ItemsAdderAssetResolver {
             }
 
             for (int i = 0; i < parts.length - 1; i++) {
-                if (parts[i].equals("assets") && i + 1 < parts.length - 1) {
+                if (parts[i].equals("assets")
+                        && i + 1 < parts.length - 1) {
                     namespaces.add(parts[i + 1]);
                 }
             }
@@ -663,7 +885,10 @@ public final class ItemsAdderAssetResolver {
             return namespaces;
         }
 
-        List<File> findExact(String candidate, String namespace) {
+        List<File> findExact(
+                String candidate,
+                String namespace
+        ) {
             String normalized = normalize(candidate);
             String preferred = namespace.toLowerCase(Locale.ROOT);
 
@@ -684,12 +909,17 @@ public final class ItemsAdderAssetResolver {
             return List.of();
         }
 
-        List<File> findSuffix(String suffix, String namespace) {
+        List<File> findSuffix(
+                String suffix,
+                String namespace
+        ) {
             String normalized = normalize(suffix);
             String preferred = namespace.toLowerCase(Locale.ROOT);
             List<File> matches = new ArrayList<>();
 
-            for (Map.Entry<String, List<File>> entry : byPath.entrySet()) {
+            for (Map.Entry<String, List<File>> entry
+                    : byPath.entrySet()) {
+
                 String path = entry.getKey();
 
                 if (!belongsToNamespace(path, preferred)) {
@@ -697,7 +927,43 @@ public final class ItemsAdderAssetResolver {
                 }
 
                 if (path.equals(preferred + "/" + normalized)
-                        || path.equals("assets/" + preferred + "/" + normalized)
+                        || path.equals(
+                                "assets/" + preferred + "/" + normalized
+                        )
+                        || path.endsWith("/" + normalized)) {
+
+                    matches.addAll(entry.getValue());
+                }
+            }
+
+            return unique(matches);
+        }
+
+        List<File> findNamespaceBasename(
+                String basename,
+                String namespace
+        ) {
+            String key = namespace.toLowerCase(Locale.ROOT)
+                    + ":"
+                    + basename.toLowerCase(Locale.ROOT);
+
+            List<File> matches = byNamespaceBasename.get(key);
+
+            return matches == null
+                    ? List.of()
+                    : unique(matches);
+        }
+
+        List<File> findGlobalSuffix(String suffix) {
+            String normalized = normalize(suffix);
+            List<File> matches = new ArrayList<>();
+
+            for (Map.Entry<String, List<File>> entry
+                    : byPath.entrySet()) {
+
+                String path = entry.getKey();
+
+                if (path.equals(normalized)
                         || path.endsWith("/" + normalized)) {
                     matches.addAll(entry.getValue());
                 }
@@ -706,30 +972,10 @@ public final class ItemsAdderAssetResolver {
             return unique(matches);
         }
 
-        List<File> findNamespaceBasename(String basename, String namespace) {
-            String key = namespace.toLowerCase(Locale.ROOT)
-                    + ":" + basename.toLowerCase(Locale.ROOT);
-
-            List<File> matches = byNamespaceBasename.get(key);
-            return matches == null ? List.of() : unique(matches);
-        }
-
-        List<File> findGlobalSuffix(String suffix) {
-            String normalized = normalize(suffix);
-            List<File> matches = new ArrayList<>();
-
-            for (Map.Entry<String, List<File>> entry : byPath.entrySet()) {
-                String path = entry.getKey();
-
-                if (path.equals(normalized) || path.endsWith("/" + normalized)) {
-                    matches.addAll(entry.getValue());
-                }
-            }
-
-            return unique(matches);
-        }
-
-        private boolean belongsToNamespace(String path, String namespace) {
+        private boolean belongsToNamespace(
+                String path,
+                String namespace
+        ) {
             return path.startsWith(namespace + "/")
                     || path.startsWith("assets/" + namespace + "/")
                     || path.contains("/assets/" + namespace + "/");
@@ -740,7 +986,8 @@ public final class ItemsAdderAssetResolver {
         }
 
         private String normalize(String value) {
-            return value.replace('\\', '/').toLowerCase(Locale.ROOT);
+            return value.replace('\\', '/')
+                    .toLowerCase(Locale.ROOT);
         }
     }
 }
