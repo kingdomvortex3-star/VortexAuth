@@ -5,9 +5,11 @@ import com.google.gson.JsonArray;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 
+import java.math.BigDecimal;
 import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
 import java.util.regex.Pattern;
@@ -41,7 +43,13 @@ public class ItemsAdderMappingValidator {
 
         if (mapping == null) {
             errors.add("Mapping JSON tidak tersedia.");
-            return new ValidationResult(false, 0, errors, warnings);
+
+            return new ValidationResult(
+                    false,
+                    0,
+                    errors,
+                    warnings
+            );
         }
 
         JsonElement formatVersion = mapping.get("format_version");
@@ -49,23 +57,48 @@ public class ItemsAdderMappingValidator {
         if (formatVersion == null
                 || !formatVersion.isJsonPrimitive()
                 || !formatVersion.getAsJsonPrimitive().isNumber()) {
+
             errors.add("format_version harus berupa angka.");
-        } else if (formatVersion.getAsInt() != 2) {
-            errors.add("format_version harus bernilai 2.");
+
+        } else {
+            try {
+                BigDecimal version = new BigDecimal(
+                        formatVersion.getAsString()
+                );
+
+                if (version.compareTo(BigDecimal.valueOf(2)) != 0) {
+                    errors.add("format_version harus bernilai 2.");
+                }
+
+            } catch (NumberFormatException exception) {
+                errors.add("format_version tidak valid.");
+            }
         }
 
         JsonElement itemsElement = mapping.get("items");
 
         if (itemsElement == null || !itemsElement.isJsonObject()) {
             errors.add("Bagian items harus berupa JSON object.");
-            return new ValidationResult(false, 0, errors, warnings);
+
+            return new ValidationResult(
+                    false,
+                    0,
+                    errors,
+                    warnings
+            );
         }
 
         JsonObject items = itemsElement.getAsJsonObject();
 
         if (items.size() == 0) {
             errors.add("Tidak ada item mapping yang ditemukan.");
-            return new ValidationResult(false, 0, errors, warnings);
+
+            return new ValidationResult(
+                    false,
+                    0,
+                    errors,
+                    warnings
+            );
         }
 
         int validDefinitions = 0;
@@ -107,7 +140,8 @@ public class ItemsAdderMappingValidator {
             for (int i = 0; i < definitions.size(); i++) {
                 JsonElement definitionElement = definitions.get(i);
 
-                if (!definitionElement.isJsonObject()) {
+                if (definitionElement == null
+                        || !definitionElement.isJsonObject()) {
                     errors.add(
                             javaIdentifier
                                     + ": definition indeks "
@@ -187,16 +221,19 @@ public class ItemsAdderMappingValidator {
             return false;
         }
 
-        double customModelData;
+        BigDecimal customModelData;
 
         try {
-            customModelData = customModelDataElement.getAsDouble();
+            customModelData = new BigDecimal(
+                    customModelDataElement.getAsString()
+            );
         } catch (NumberFormatException exception) {
             errors.add(prefix + ": custom_model_data tidak valid.");
             return false;
         }
 
-        if (!Double.isFinite(customModelData) || customModelData < 0) {
+        if (!Double.isFinite(customModelData.doubleValue())
+                || customModelData.signum() < 0) {
             errors.add(
                     prefix
                             + ": custom_model_data harus angka positif atau nol."
@@ -204,11 +241,21 @@ public class ItemsAdderMappingValidator {
             return false;
         }
 
+        float normalizedCmd = customModelData.floatValue();
+
+        if (!Float.isFinite(normalizedCmd) || normalizedCmd < 0) {
+            errors.add(
+                    prefix
+                            + ": custom_model_data berada di luar batas float."
+            );
+            return false;
+        }
+
         String mappingKey = javaIdentifier
                 + "#"
-                + Float.toString((float) customModelData);
+                + Float.toString(normalizedCmd);
 
-        if (!registeredMappings.add(mappingKey)) {
+        if (registeredMappings.contains(mappingKey)) {
             errors.add(
                     prefix
                             + ": pasangan Java item dan CMD duplikat: "
@@ -251,7 +298,7 @@ public class ItemsAdderMappingValidator {
             return false;
         }
 
-        if (!registeredBedrockIdentifiers.add(bedrockIdentifier)) {
+        if (registeredBedrockIdentifiers.contains(bedrockIdentifier)) {
             errors.add(
                     prefix
                             + ": bedrock_identifier duplikat: "
@@ -323,6 +370,10 @@ public class ItemsAdderMappingValidator {
             return false;
         }
 
+        // Registrasi dilakukan setelah seluruh validasi berhasil.
+        registeredMappings.add(mappingKey);
+        registeredBedrockIdentifiers.add(bedrockIdentifier);
+
         warnings.add(
                 prefix
                         + ": pastikan texture atlas menyediakan key "
@@ -338,7 +389,7 @@ public class ItemsAdderMappingValidator {
                 .replace('/', '_')
                 .replace('\\', '_')
                 .replaceAll("[^a-zA-Z0-9_.-]", "_")
-                .toLowerCase(java.util.Locale.ROOT);
+                .toLowerCase(Locale.ROOT);
     }
 
     private boolean isValidIdentifier(String identifier) {
