@@ -41,7 +41,6 @@ public class ItemsAdderBedrockResourcePackBuilder {
             new GsonBuilder().setPrettyPrinting().create();
 
     private static final int MAX_PARENT_DEPTH = 32;
-
     private static final String PARENT_KEY_PREFIX = "models:parent:";
 
     private final ItemsAdderAssetResolver assetResolver =
@@ -52,6 +51,9 @@ public class ItemsAdderBedrockResourcePackBuilder {
 
     private final ItemsAdderModelParser modelParser =
             new ItemsAdderModelParser();
+
+    private final ItemsAdderBedrockGeometryConverter geometryConverter =
+            new ItemsAdderBedrockGeometryConverter();
 
     public PackResult build(
             File itemsAdderContents,
@@ -149,8 +151,12 @@ public class ItemsAdderBedrockResourcePackBuilder {
 
         File packRoot = new File(workingDirectory, "bedrock_pack");
         File texturesDirectory = new File(packRoot, "textures/items");
+        File geometryDirectory = new File(packRoot, "models/entity");
+        File attachablesDirectory = new File(packRoot, "attachables");
 
         Files.createDirectories(texturesDirectory.toPath());
+        Files.createDirectories(geometryDirectory.toPath());
+        Files.createDirectories(attachablesDirectory.toPath());
 
         ItemsAdderAssetResolver.ResolutionResult resolution =
                 assetResolver.resolve(parseResult, sourceDirectory);
@@ -175,6 +181,8 @@ public class ItemsAdderBedrockResourcePackBuilder {
         int copiedTextures = 0;
         int uvIconsGenerated = 0;
         int inheritedModelsUsed = 0;
+        int geometriesGenerated = 0;
+        int attachablesGenerated = 0;
 
         for (ItemsAdderConfigParser.AssetInfo asset
                 : parseResult.getAssets()) {
@@ -236,8 +244,7 @@ public class ItemsAdderBedrockResourcePackBuilder {
                         asset.getNamespacedId()
                                 + ": mapping dengan CMD "
                                 + assetCmdValue
-                                + " tidak ditemukan untuk "
-                                + javaIdentifier + "."
+                                + " tidak ditemukan."
                 );
                 continue;
             }
@@ -270,7 +277,7 @@ public class ItemsAdderBedrockResourcePackBuilder {
             if (resolvedAsset == null) {
                 skipped.add(
                         asset.getNamespacedId()
-                                + ": aset tidak ditemukan dalam hasil resolver."
+                                + ": aset tidak ditemukan dalam resolver."
                 );
                 continue;
             }
@@ -278,18 +285,9 @@ public class ItemsAdderBedrockResourcePackBuilder {
             File sourceTexture = findResolvedTexture(resolvedAsset);
 
             if (sourceTexture == null) {
-                String missing = resolvedAsset.getMissingReferences()
-                        .isEmpty()
-                        ? "referensi tekstur tidak ditemukan dalam ZIP"
-                        : String.join(
-                                ", ",
-                                resolvedAsset.getMissingReferences()
-                        );
-
                 skipped.add(
                         asset.getNamespacedId()
-                                + ": tekstur tidak ditemukan: "
-                                + missing
+                                + ": tekstur tidak ditemukan."
                 );
                 continue;
             }
@@ -299,8 +297,7 @@ public class ItemsAdderBedrockResourcePackBuilder {
             if (textureData.has(atlasKey)) {
                 skipped.add(
                         asset.getNamespacedId()
-                                + ": key tekstur atlas duplikat: "
-                                + atlasKey
+                                + ": key atlas duplikat: " + atlasKey
                 );
                 continue;
             }
@@ -310,24 +307,33 @@ public class ItemsAdderBedrockResourcePackBuilder {
                     atlasKey + ".png"
             );
 
+            ModelBuildData modelData = null;
             boolean uvGenerated = false;
-            boolean inheritedModelUsed = false;
 
             try {
-                UvIconResult uvResult = createUvIcon(
+                modelData = loadMergedModel(
                         resolvedAsset,
-                        destination,
                         warnings,
                         asset.getNamespacedId()
                 );
 
-                uvGenerated = uvResult.generated();
-                inheritedModelUsed = uvResult.inheritedModelUsed();
+                if (modelData != null && modelData.model().hasElements()) {
+                    uvGenerated = createUvIcon(
+                            resolvedAsset,
+                            modelData.model(),
+                            destination,
+                            warnings,
+                            asset.getNamespacedId()
+                    );
 
+                    if (modelData.inherited()) {
+                        inheritedModelsUsed++;
+                    }
+                }
             } catch (Exception exception) {
                 warnings.add(
                         asset.getNamespacedId()
-                                + ": ekstraksi UV gagal: "
+                                + ": pembacaan model gagal: "
                                 + exception.getMessage()
                 );
             }
@@ -342,17 +348,80 @@ public class ItemsAdderBedrockResourcePackBuilder {
                 uvIconsGenerated++;
             }
 
-            if (inheritedModelUsed) {
-                inheritedModelsUsed++;
-            }
-
             JsonObject textureEntry = new JsonObject();
             JsonArray texturePaths = new JsonArray();
 
             texturePaths.add("textures/items/" + atlasKey);
             textureEntry.add("textures", texturePaths);
-
             textureData.add(atlasKey, textureEntry);
+
+            if (modelData != null && modelData.model().hasElements()) {
+                try {
+                    BufferedImage textureImage =
+                            ImageIO.read(sourceTexture);
+
+                    if (textureImage != null) {
+                        String geometryIdentifier =
+                                "geometry.vortexconverter."
+                                        + atlasKey.replace('.', '_');
+
+                        ItemsAdderBedrockGeometryConverter.ConversionResult
+                                geometryResult = geometryConverter.convert(
+                                        modelData.model(),
+                                        geometryIdentifier,
+                                        textureImage.getWidth(),
+                                        textureImage.getHeight()
+                                );
+
+                        if (geometryResult.successful()) {
+                            File geometryFile = new File(
+                                    geometryDirectory,
+                                    atlasKey + ".geo.json"
+                            );
+
+                            geometryConverter.write(
+                                    geometryResult,
+                                    geometryFile
+                            );
+
+                            File attachableFile = new File(
+                                    attachablesDirectory,
+                                    atlasKey + ".json"
+                            );
+
+                            JsonObject attachable = createAttachable(
+                                    bedrockIdentifier,
+                                    geometryIdentifier,
+                                    "textures/items/" + atlasKey
+                            );
+
+                            writeJson(attachableFile, attachable);
+
+                            geometriesGenerated++;
+                            attachablesGenerated++;
+
+                            warnings.addAll(
+                                    prefixWarnings(
+                                            asset.getNamespacedId(),
+                                            geometryResult.warnings()
+                                    )
+                            );
+                        } else {
+                            warnings.add(
+                                    asset.getNamespacedId()
+                                            + ": geometry gagal: "
+                                            + geometryResult.error()
+                            );
+                        }
+                    }
+                } catch (Exception exception) {
+                    warnings.add(
+                            asset.getNamespacedId()
+                                    + ": pembuatan geometry gagal: "
+                                    + exception.getMessage()
+                    );
+                }
+            }
 
             generatedIdentifiers.put(
                     bedrockIdentifier,
@@ -373,18 +442,13 @@ public class ItemsAdderBedrockResourcePackBuilder {
             }
 
             retainedDefinitions.add(definition.deepCopy());
-
             copiedTextures++;
         }
 
         if (copiedTextures == 0) {
             throw new IOException(
                     "Tidak ada tekstur item yang berhasil dikonversi. "
-                            + "Sumber: "
-                            + (zipMode
-                            ? generatedZip.getName()
-                            : "ItemsAdder contents (mode lama)")
-                            + ". Resolver memindai "
+                            + "Resolver memindai "
                             + resolution.getScannedFiles()
                             + " file."
             );
@@ -424,7 +488,6 @@ public class ItemsAdderBedrockResourcePackBuilder {
         );
 
         Files.deleteIfExists(temporaryPack.toPath());
-
         createArchive(packRoot, temporaryPack);
 
         try {
@@ -443,50 +506,43 @@ public class ItemsAdderBedrockResourcePackBuilder {
         }
 
         warnings.add(
-                "Sumber aset: "
-                        + (zipMode
-                        ? generatedZip.getAbsolutePath()
-                        : itemsAdderContents.getAbsolutePath())
-        );
-
-        warnings.add(
-                "Resolver memindai "
-                        + resolution.getScannedFiles()
+                "Resolver memindai " + resolution.getScannedFiles()
                         + " file."
         );
 
         warnings.add(
-                "Resolver menemukan "
-                        + resolution.getResolvedFiles()
-                        + " referensi file dan "
-                        + resolution.getMissingReferences()
-                        + " referensi yang tidak ditemukan."
+                "Referensi ditemukan: " + resolution.getResolvedFiles()
+                        + ", tidak ditemukan: "
+                        + resolution.getMissingReferences() + "."
         );
 
         warnings.add(
-                "Icon berhasil dibuat: " + copiedTextures
-                        + ", hasil ekstraksi UV: " + uvIconsGenerated
-                        + ", fallback tekstur: "
+                "Icon: " + copiedTextures
+                        + ", ekstraksi UV: " + uvIconsGenerated
+                        + ", fallback: "
                         + (copiedTextures - uvIconsGenerated) + "."
         );
 
         warnings.add(
-                "Model yang menggunakan data parent: "
+                "Model dengan parent inheritance: "
                         + inheritedModelsUsed + "."
         );
 
         warnings.add(
-                "Mapping telah disinkronkan dengan tekstur yang berhasil dibuat."
+                "Geometry JSON dibuat: " + geometriesGenerated
+                        + ", attachable dibuat: "
+                        + attachablesGenerated + "."
         );
 
         warnings.add(
-                "Ekstraksi UV menggunakan face dengan area UV terbesar. "
-                        + "Ini bukan rendering model 3D lengkap."
+                "Geometry dan attachable dibuat sebagai struktur awal. "
+                        + "Kecocokan render dan pemanggilan attachable oleh "
+                        + "Geyser harus diuji di client Bedrock."
         );
 
         warnings.add(
-                "Model 3D Bedrock, block, furniture, entity, animasi, "
-                        + "dan suara belum dikonversi secara penuh."
+                "Block, furniture, entity, animasi, dan suara "
+                        + "belum dikonversi secara penuh."
         );
 
         return new PackResult(
@@ -501,9 +557,67 @@ public class ItemsAdderBedrockResourcePackBuilder {
         );
     }
 
-    private UvIconResult createUvIcon(
+    private JsonObject createAttachable(
+            String bedrockIdentifier,
+            String geometryIdentifier,
+            String texturePath
+    ) {
+        JsonObject root = new JsonObject();
+        root.addProperty("format_version", "1.10.0");
+
+        JsonObject attachable = new JsonObject();
+        JsonObject description = new JsonObject();
+
+        description.addProperty(
+                "identifier",
+                bedrockIdentifier
+        );
+
+        JsonObject materials = new JsonObject();
+        materials.addProperty(
+                "default",
+                "entity_alphatest"
+        );
+
+        JsonObject textures = new JsonObject();
+        textures.addProperty("default", texturePath);
+
+        JsonObject geometries = new JsonObject();
+        geometries.addProperty("default", geometryIdentifier);
+
+        JsonArray renderControllers = new JsonArray();
+        renderControllers.add("controller.render.default");
+
+        description.add("materials", materials);
+        description.add("textures", textures);
+        description.add("geometry", geometries);
+        description.add("render_controllers", renderControllers);
+
+        attachable.add("description", description);
+        root.add("minecraft:attachable", attachable);
+
+        return root;
+    }
+
+    private List<String> prefixWarnings(
+            String assetName,
+            List<String> sourceWarnings
+    ) {
+        List<String> result = new ArrayList<>();
+
+        if (sourceWarnings == null) {
+            return result;
+        }
+
+        for (String warning : sourceWarnings) {
+            result.add(assetName + ": " + warning);
+        }
+
+        return result;
+    }
+
+    private ModelBuildData loadMergedModel(
             ItemsAdderAssetResolver.ResolvedAsset resolvedAsset,
-            File destination,
             List<String> warnings,
             String assetName
     ) throws IOException {
@@ -511,7 +625,7 @@ public class ItemsAdderBedrockResourcePackBuilder {
         File modelFile = findResolvedModel(resolvedAsset);
 
         if (modelFile == null) {
-            return new UvIconResult(false, false);
+            return null;
         }
 
         String rootModelReference = findRootModelReference(
@@ -530,15 +644,21 @@ public class ItemsAdderBedrockResourcePackBuilder {
         );
 
         if (mergedRoot == null) {
-            return new UvIconResult(false, false);
+            return null;
         }
 
+        boolean inherited = mergedRoot.has(
+                "vortexconverter_parent_inherited"
+        ) && mergedRoot.get(
+                "vortexconverter_parent_inherited"
+        ).getAsBoolean();
+
+        mergedRoot.remove("vortexconverter_parent_inherited");
+
         File temporaryModel = new File(
-                destination.getParentFile(),
+                modelFile.getParentFile(),
                 ".vortex-model-" + UUID.randomUUID() + ".json"
         );
-
-        ItemsAdderModelParser.ModelData model;
 
         try {
             Files.writeString(
@@ -547,100 +667,14 @@ public class ItemsAdderBedrockResourcePackBuilder {
                     StandardCharsets.UTF_8
             );
 
-            model = modelParser.parse(temporaryModel);
+            ItemsAdderModelParser.ModelData model =
+                    modelParser.parse(temporaryModel);
+
+            return new ModelBuildData(model, inherited);
+
         } finally {
             Files.deleteIfExists(temporaryModel.toPath());
         }
-
-        if (!model.hasElements()) {
-            warnings.add(
-                    assetName
-                            + ": model dan parent tidak memiliki geometry elements."
-            );
-            return new UvIconResult(false, false);
-        }
-
-        ItemsAdderModelParser.FaceData selectedFace = null;
-        double largestArea = -1.0;
-
-        for (ItemsAdderModelParser.FaceData face : model.faces()) {
-            if (!face.hasExplicitUv()) {
-                continue;
-            }
-
-            double width = Math.abs(face.getU2() - face.getU1());
-            double height = Math.abs(face.getV2() - face.getV1());
-            double area = width * height;
-
-            if (area > largestArea) {
-                largestArea = area;
-                selectedFace = face;
-            }
-        }
-
-        if (selectedFace == null || largestArea <= 0) {
-            warnings.add(
-                    assetName
-                            + ": model tidak memiliki UV eksplisit yang dapat dipotong."
-            );
-            return new UvIconResult(false, false);
-        }
-
-        File textureFile = findFaceTexture(
-                resolvedAsset,
-                model,
-                selectedFace
-        );
-
-        if (textureFile == null) {
-            warnings.add(
-                    assetName
-                            + ": tekstur face UV tidak ditemukan."
-            );
-            return new UvIconResult(false, false);
-        }
-
-        BufferedImage source = ImageIO.read(textureFile);
-
-        if (source == null) {
-            warnings.add(
-                    assetName
-                            + ": file tekstur bukan PNG yang dapat dibaca."
-            );
-            return new UvIconResult(false, false);
-        }
-
-        BufferedImage cropped = cropUv(source, selectedFace);
-
-        if (cropped == null) {
-            warnings.add(
-                    assetName
-                            + ": koordinat UV berada di luar tekstur."
-            );
-            return new UvIconResult(false, false);
-        }
-
-        BufferedImage rotated = rotateTexture(
-                cropped,
-                selectedFace.rotation()
-        );
-
-        File parent = destination.getParentFile();
-
-        if (parent != null) {
-            Files.createDirectories(parent.toPath());
-        }
-
-        if (!ImageIO.write(rotated, "png", destination)) {
-            throw new IOException("Tidak ada PNG image writer.");
-        }
-
-        return new UvIconResult(
-                true,
-                mergedRoot.has("vortexconverter_parent_inherited")
-                        && mergedRoot.get("vortexconverter_parent_inherited")
-                        .getAsBoolean()
-        );
     }
 
     private JsonObject mergeResolvedModelHierarchy(
@@ -725,7 +759,7 @@ public class ItemsAdderBedrockResourcePackBuilder {
                 } else {
                     warnings.add(
                             assetName
-                                    + ": file parent tidak tersedia di Resolver: "
+                                    + ": parent tidak ditemukan di Resolver: "
                                     + parentReference
                     );
                 }
@@ -777,9 +811,13 @@ public class ItemsAdderBedrockResourcePackBuilder {
             }
 
             merged.remove("parent");
+
             merged.addProperty(
                     "vortexconverter_parent_inherited",
-                    inherited
+                    inherited || getBoolean(
+                            merged,
+                            "vortexconverter_parent_inherited"
+                    )
             );
 
             return merged;
@@ -787,6 +825,82 @@ public class ItemsAdderBedrockResourcePackBuilder {
         } finally {
             visited.remove(identity);
         }
+    }
+
+    private boolean createUvIcon(
+            ItemsAdderAssetResolver.ResolvedAsset resolvedAsset,
+            ItemsAdderModelParser.ModelData model,
+            File destination,
+            List<String> warnings,
+            String assetName
+    ) throws IOException {
+
+        if (model == null || !model.hasElements()) {
+            return false;
+        }
+
+        ItemsAdderModelParser.FaceData selectedFace = null;
+        double largestArea = -1.0;
+
+        for (ItemsAdderModelParser.FaceData face : model.faces()) {
+            if (!face.hasExplicitUv()) {
+                continue;
+            }
+
+            double width = Math.abs(face.getU2() - face.getU1());
+            double height = Math.abs(face.getV2() - face.getV1());
+            double area = width * height;
+
+            if (area > largestArea) {
+                largestArea = area;
+                selectedFace = face;
+            }
+        }
+
+        if (selectedFace == null || largestArea <= 0) {
+            warnings.add(
+                    assetName + ": tidak memiliki UV eksplisit."
+            );
+            return false;
+        }
+
+        File textureFile = findFaceTexture(
+                resolvedAsset,
+                model,
+                selectedFace
+        );
+
+        if (textureFile == null) {
+            warnings.add(
+                    assetName + ": texture face UV tidak ditemukan."
+            );
+            return false;
+        }
+
+        BufferedImage source = ImageIO.read(textureFile);
+
+        if (source == null) {
+            return false;
+        }
+
+        BufferedImage cropped = cropUv(source, selectedFace);
+
+        if (cropped == null) {
+            return false;
+        }
+
+        BufferedImage rotated = rotateTexture(
+                cropped,
+                selectedFace.rotation()
+        );
+
+        Files.createDirectories(destination.getParentFile().toPath());
+
+        if (!ImageIO.write(rotated, "png", destination)) {
+            throw new IOException("Tidak ada PNG image writer.");
+        }
+
+        return true;
     }
 
     private String findRootModelReference(
@@ -797,9 +911,8 @@ public class ItemsAdderBedrockResourcePackBuilder {
                 : resolvedAsset.getResolvedFiles().entrySet()) {
 
             String key = entry.getKey();
-            String property = getPropertyName(key);
 
-            if (!isModelProperty(property)) {
+            if (!isModelProperty(getPropertyName(key))) {
                 continue;
             }
 
@@ -823,51 +936,6 @@ public class ItemsAdderBedrockResourcePackBuilder {
         );
     }
 
-    private File firstJson(List<File> files) {
-        for (File file : files) {
-            if (file != null
-                    && file.isFile()
-                    && file.getName().toLowerCase(Locale.ROOT)
-                    .endsWith(".json")) {
-                return file;
-            }
-        }
-
-        return null;
-    }
-
-    private String normalizeFileIdentity(File file) {
-        try {
-            return file.toPath().toRealPath()
-                    .toString().toLowerCase(Locale.ROOT);
-        } catch (IOException exception) {
-            return file.getAbsolutePath()
-                    .toLowerCase(Locale.ROOT);
-        }
-    }
-
-    private String getJsonString(JsonObject object, String key) {
-        if (object == null || !object.has(key)) {
-            return null;
-        }
-
-        JsonElement value = object.get(key);
-
-        if (value == null
-                || !value.isJsonPrimitive()
-                || !value.getAsJsonPrimitive().isString()) {
-            return null;
-        }
-
-        return value.getAsString().trim();
-    }
-
-    private record UvIconResult(
-            boolean generated,
-            boolean inheritedModelUsed
-    ) {
-    }
-
     private File findResolvedModel(
             ItemsAdderAssetResolver.ResolvedAsset resolvedAsset
     ) {
@@ -881,19 +949,14 @@ public class ItemsAdderBedrockResourcePackBuilder {
                 continue;
             }
 
-            String property = getPropertyName(key);
-
-            if (!isModelProperty(property)) {
+            if (!isModelProperty(getPropertyName(key))) {
                 continue;
             }
 
-            for (File file : entry.getValue()) {
-                if (file != null
-                        && file.isFile()
-                        && file.getName().toLowerCase(Locale.ROOT)
-                        .endsWith(".json")) {
-                    return file;
-                }
+            File model = firstJson(entry.getValue());
+
+            if (model != null) {
+                return model;
             }
         }
 
@@ -906,6 +969,23 @@ public class ItemsAdderBedrockResourcePackBuilder {
                 || property.contains("model_path")
                 || property.contains("model_file")
                 || property.contains("item_model");
+    }
+
+    private File firstJson(List<File> files) {
+        if (files == null) {
+            return null;
+        }
+
+        for (File file : files) {
+            if (file != null
+                    && file.isFile()
+                    && file.getName().toLowerCase(Locale.ROOT)
+                    .endsWith(".json")) {
+                return file;
+            }
+        }
+
+        return null;
     }
 
     private File findFaceTexture(
@@ -955,22 +1035,106 @@ public class ItemsAdderBedrockResourcePackBuilder {
         }
 
         if (resolvedReference != null) {
-            String normalizedReference =
+            String normalized =
                     resolvedReference.toLowerCase(Locale.ROOT);
 
             for (Map.Entry<String, List<File>> entry : files.entrySet()) {
                 String key = entry.getKey().toLowerCase(Locale.ROOT);
 
-                if (!key.startsWith("textures:model_texture:")
-                        || !key.endsWith(":" + normalizedReference)) {
-                    continue;
-                }
+                if (key.startsWith("textures:model_texture:")
+                        && key.endsWith(":" + normalized)) {
+                    File png = firstPng(entry.getValue());
 
+                    if (png != null) {
+                        return png;
+                    }
+                }
+            }
+        }
+
+        return null;
+    }
+
+    private File findResolvedTexture(
+            ItemsAdderAssetResolver.ResolvedAsset resolvedAsset
+    ) {
+        Map<String, List<File>> files =
+                resolvedAsset.getResolvedFiles();
+
+        for (Map.Entry<String, List<File>> entry : files.entrySet()) {
+            String key = entry.getKey();
+
+            if (key.startsWith("textures:model_texture:")) {
+                continue;
+            }
+
+            if (!isTextureProperty(getPropertyName(key))) {
+                continue;
+            }
+
+            File png = firstPng(entry.getValue());
+
+            if (png != null) {
+                return png;
+            }
+        }
+
+        File layer0 = findModelTexture(files, ":layer0:");
+
+        if (layer0 != null) {
+            return layer0;
+        }
+
+        File particle = findModelTexture(files, ":particle:");
+
+        if (particle != null) {
+            return particle;
+        }
+
+        for (Map.Entry<String, List<File>> entry : files.entrySet()) {
+            if (entry.getKey().startsWith("textures:model_texture:")) {
                 File png = firstPng(entry.getValue());
 
                 if (png != null) {
                     return png;
                 }
+            }
+        }
+
+        return null;
+    }
+
+    private File findModelTexture(
+            Map<String, List<File>> files,
+            String textureKey
+    ) {
+        for (Map.Entry<String, List<File>> entry : files.entrySet()) {
+            String key = entry.getKey().toLowerCase(Locale.ROOT);
+
+            if (key.startsWith("textures:model_texture:")
+                    && key.contains(textureKey)) {
+                File png = firstPng(entry.getValue());
+
+                if (png != null) {
+                    return png;
+                }
+            }
+        }
+
+        return null;
+    }
+
+    private File firstPng(List<File> files) {
+        if (files == null) {
+            return null;
+        }
+
+        for (File file : files) {
+            if (file != null
+                    && file.isFile()
+                    && file.getName().toLowerCase(Locale.ROOT)
+                    .endsWith(".png")) {
+                return file;
             }
         }
 
@@ -1007,14 +1171,16 @@ public class ItemsAdderBedrockResourcePackBuilder {
         x2 = Math.max(x1 + 1, Math.min(source.getWidth(), x2));
         y2 = Math.max(y1 + 1, Math.min(source.getHeight(), y2));
 
-        int width = x2 - x1;
-        int height = y2 - y1;
-
-        if (width <= 0 || height <= 0) {
+        if (x2 <= x1 || y2 <= y1) {
             return null;
         }
 
-        return source.getSubimage(x1, y1, width, height);
+        return source.getSubimage(
+                x1,
+                y1,
+                x2 - x1,
+                y2 - y1
+        );
     }
 
     private BufferedImage rotateTexture(
@@ -1023,13 +1189,10 @@ public class ItemsAdderBedrockResourcePackBuilder {
     ) {
         int normalized = Math.floorMod(rotation, 360);
 
-        if (normalized == 0) {
-            return copyImage(source);
-        }
-
-        if (normalized != 90
+        if (normalized == 0
+                || (normalized != 90
                 && normalized != 180
-                && normalized != 270) {
+                && normalized != 270)) {
             return copyImage(source);
         }
 
@@ -1180,95 +1343,6 @@ public class ItemsAdderBedrockResourcePackBuilder {
         return null;
     }
 
-    private File findResolvedTexture(
-            ItemsAdderAssetResolver.ResolvedAsset resolvedAsset
-    ) {
-        Map<String, List<File>> files =
-                resolvedAsset.getResolvedFiles();
-
-        for (Map.Entry<String, List<File>> entry : files.entrySet()) {
-            String key = entry.getKey();
-
-            if (key.startsWith("textures:model_texture:")) {
-                continue;
-            }
-
-            String property = getPropertyName(key);
-
-            if (!isTextureProperty(property)) {
-                continue;
-            }
-
-            File file = firstPng(entry.getValue());
-
-            if (file != null) {
-                return file;
-            }
-        }
-
-        File layer0 = findModelTexture(files, ":layer0:");
-
-        if (layer0 != null) {
-            return layer0;
-        }
-
-        File particle = findModelTexture(files, ":particle:");
-
-        if (particle != null) {
-            return particle;
-        }
-
-        for (Map.Entry<String, List<File>> entry : files.entrySet()) {
-            if (!entry.getKey().startsWith("textures:model_texture:")) {
-                continue;
-            }
-
-            File file = firstPng(entry.getValue());
-
-            if (file != null) {
-                return file;
-            }
-        }
-
-        return null;
-    }
-
-    private File findModelTexture(
-            Map<String, List<File>> files,
-            String textureKey
-    ) {
-        for (Map.Entry<String, List<File>> entry : files.entrySet()) {
-            String key = entry.getKey().toLowerCase(Locale.ROOT);
-
-            if (!key.startsWith("textures:model_texture:")
-                    || !key.contains(textureKey)) {
-                continue;
-            }
-
-            File file = firstPng(entry.getValue());
-
-            if (file != null) {
-                return file;
-            }
-        }
-
-        return null;
-    }
-
-    private File firstPng(List<File> files) {
-        for (File file : files) {
-            if (file == null || !file.isFile()) {
-                continue;
-            }
-
-            if (file.getName().toLowerCase(Locale.ROOT).endsWith(".png")) {
-                return file;
-            }
-        }
-
-        return null;
-    }
-
     private String getPropertyName(String key) {
         int separator = key.indexOf(':');
 
@@ -1286,6 +1360,44 @@ public class ItemsAdderBedrockResourcePackBuilder {
                 || property.endsWith(".icon")
                 || property.contains("texture_path")
                 || property.contains("texture_file");
+    }
+
+    private String getJsonString(JsonObject object, String key) {
+        if (object == null || !object.has(key)) {
+            return null;
+        }
+
+        JsonElement value = object.get(key);
+
+        if (value == null
+                || !value.isJsonPrimitive()
+                || !value.getAsJsonPrimitive().isString()) {
+            return null;
+        }
+
+        return value.getAsString().trim();
+    }
+
+    private boolean getBoolean(JsonObject object, String key) {
+        if (object == null || !object.has(key)) {
+            return false;
+        }
+
+        try {
+            return object.get(key).getAsBoolean();
+        } catch (Exception exception) {
+            return false;
+        }
+    }
+
+    private String normalizeFileIdentity(File file) {
+        try {
+            return file.toPath().toRealPath()
+                    .toString().toLowerCase(Locale.ROOT);
+        } catch (IOException exception) {
+            return file.getAbsolutePath()
+                    .toLowerCase(Locale.ROOT);
+        }
     }
 
     private String toAtlasKey(String identifier) {
@@ -1418,6 +1530,12 @@ public class ItemsAdderBedrockResourcePackBuilder {
                 Files.deleteIfExists(path);
             }
         }
+    }
+
+    private record ModelBuildData(
+            ItemsAdderModelParser.ModelData model,
+            boolean inherited
+    ) {
     }
 
     public record PackResult(
