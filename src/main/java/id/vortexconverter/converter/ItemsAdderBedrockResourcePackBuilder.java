@@ -10,6 +10,7 @@ import com.google.gson.JsonObject;
 import id.vortexconverter.mappings.ItemsAdderCustomMappingGenerator;
 import id.vortexconverter.scanner.ItemsAdderAssetResolver;
 import id.vortexconverter.scanner.ItemsAdderConfigParser;
+import id.vortexconverter.scanner.ItemsAdderZipExtractor;
 
 import java.io.File;
 import java.io.IOException;
@@ -36,6 +37,13 @@ public class ItemsAdderBedrockResourcePackBuilder {
     private final ItemsAdderAssetResolver assetResolver =
             new ItemsAdderAssetResolver();
 
+    private final ItemsAdderZipExtractor zipExtractor =
+            new ItemsAdderZipExtractor();
+
+    /**
+     * Metode lama tetap dipertahankan agar service versi sebelumnya
+     * tetap dapat dikompilasi selama migrasi ZIP dilakukan bertahap.
+     */
     public PackResult build(
             File itemsAdderContents,
             File geyserDataDirectory,
@@ -43,45 +51,129 @@ public class ItemsAdderBedrockResourcePackBuilder {
             ItemsAdderCustomMappingGenerator.MappingResult mappingResult
     ) throws IOException {
 
+        return buildFromSource(
+                itemsAdderContents,
+                null,
+                geyserDataDirectory,
+                parseResult,
+                mappingResult
+        );
+    }
+
+    /**
+     * Metode baru:
+     * - Metadata item tetap berasal dari parser YAML.
+     * - Model dan tekstur berasal dari generated.zip.
+     */
+    public PackResult build(
+            File itemsAdderContents,
+            File generatedZip,
+            File geyserDataDirectory,
+            ItemsAdderConfigParser.ParseResult parseResult,
+            ItemsAdderCustomMappingGenerator.MappingResult mappingResult
+    ) throws IOException {
+
+        if (generatedZip == null || !generatedZip.isFile()) {
+            throw new IOException(
+                    "ItemsAdder output/generated.zip tidak ditemukan."
+            );
+        }
+
+        return buildFromSource(
+                itemsAdderContents,
+                generatedZip,
+                geyserDataDirectory,
+                parseResult,
+                mappingResult
+        );
+    }
+
+    private PackResult buildFromSource(
+            File itemsAdderContents,
+            File generatedZip,
+            File geyserDataDirectory,
+            ItemsAdderConfigParser.ParseResult parseResult,
+            ItemsAdderCustomMappingGenerator.MappingResult mappingResult
+    ) throws IOException {
+
         if (itemsAdderContents == null
                 || !itemsAdderContents.isDirectory()) {
-            throw new IOException("ItemsAdder contents tidak ditemukan.");
+            throw new IOException(
+                    "ItemsAdder contents tidak ditemukan."
+            );
         }
 
         if (geyserDataDirectory == null) {
-            throw new IOException("Folder data Geyser tidak ditemukan.");
+            throw new IOException(
+                    "Folder data Geyser tidak ditemukan."
+            );
         }
 
         if (parseResult == null || mappingResult == null
                 || mappingResult.mapping() == null) {
-            throw new IOException("Data parser atau mapping tidak tersedia.");
+            throw new IOException(
+                    "Data parser atau mapping tidak tersedia."
+            );
         }
 
-        File packsDirectory = new File(geyserDataDirectory, "packs");
+        File packsDirectory = new File(
+                geyserDataDirectory,
+                "packs"
+        );
+
         Files.createDirectories(packsDirectory.toPath());
 
         if (!packsDirectory.isDirectory()) {
-            throw new IOException("Folder Geyser packs tidak tersedia.");
+            throw new IOException(
+                    "Folder Geyser packs tidak tersedia."
+            );
         }
-
-        ItemsAdderAssetResolver.ResolutionResult resolution =
-                assetResolver.resolve(parseResult, itemsAdderContents);
 
         File workingDirectory = new File(
                 geyserDataDirectory,
                 ".vortexconverter-bedrock-work"
         );
 
-        if (workingDirectory.exists()) {
-            deleteDirectory(workingDirectory.toPath());
+        Path workingPath = workingDirectory.toPath();
+
+        if (Files.exists(workingPath)) {
+            deleteDirectory(workingPath);
         }
 
-        File texturesDirectory = new File(
+        Files.createDirectories(workingPath);
+
+        File sourceDirectory;
+        boolean zipMode = generatedZip != null;
+
+        if (zipMode) {
+            Path extractedPath = zipExtractor.extract(
+                    generatedZip,
+                    workingPath.resolve("source")
+            );
+
+            sourceDirectory = extractedPath.toFile();
+        } else {
+            // Mode lama hanya untuk kompatibilitas sementara.
+            sourceDirectory = itemsAdderContents;
+        }
+
+        File packRoot = new File(
                 workingDirectory,
+                "bedrock_pack"
+        );
+
+        File texturesDirectory = new File(
+                packRoot,
                 "textures/items"
         );
 
         Files.createDirectories(texturesDirectory.toPath());
+
+        ItemsAdderAssetResolver.ResolutionResult resolution =
+                assetResolver.resolve(
+                        parseResult,
+                        sourceDirectory
+                );
 
         List<String> warnings = new ArrayList<>();
         List<String> skipped = new ArrayList<>();
@@ -90,7 +182,9 @@ public class ItemsAdderBedrockResourcePackBuilder {
                 .getAsJsonObject("items");
 
         if (items == null) {
-            throw new IOException("Mapping tidak memiliki objek items.");
+            throw new IOException(
+                    "Mapping tidak memiliki objek items."
+            );
         }
 
         JsonObject textureData = new JsonObject();
@@ -114,8 +208,10 @@ public class ItemsAdderBedrockResourcePackBuilder {
             String javaIdentifier = asset.getJavaIdentifier();
 
             if (javaIdentifier == null || !items.has(javaIdentifier)) {
-                skipped.add(asset.getNamespacedId()
-                        + ": mapping Java tidak ditemukan.");
+                skipped.add(
+                        asset.getNamespacedId()
+                                + ": mapping Java tidak ditemukan."
+                );
                 continue;
             }
 
@@ -124,22 +220,29 @@ public class ItemsAdderBedrockResourcePackBuilder {
             try {
                 definitions = items.getAsJsonArray(javaIdentifier);
             } catch (Exception exception) {
-                skipped.add(asset.getNamespacedId()
-                        + ": format mapping tidak valid.");
+                skipped.add(
+                        asset.getNamespacedId()
+                                + ": format mapping tidak valid."
+                );
                 continue;
             }
 
             if (definitions == null || definitions.isEmpty()) {
-                skipped.add(asset.getNamespacedId()
-                        + ": definisi mapping kosong.");
+                skipped.add(
+                        asset.getNamespacedId()
+                                + ": definisi mapping kosong."
+                );
                 continue;
             }
 
-            Object assetCmdValue = asset.getCustomModelDataValue();
+            String assetCmdValue =
+                    asset.getCustomModelDataValue();
 
             if (assetCmdValue == null) {
-                skipped.add(asset.getNamespacedId()
-                        + ": Custom Model Data tidak ditemukan.");
+                skipped.add(
+                        asset.getNamespacedId()
+                                + ": Custom Model Data tidak ditemukan."
+                );
                 continue;
             }
 
@@ -149,18 +252,22 @@ public class ItemsAdderBedrockResourcePackBuilder {
             );
 
             if (definition == null) {
-                skipped.add(asset.getNamespacedId()
-                        + ": mapping dengan CMD "
-                        + assetCmdValue
-                        + " tidak ditemukan untuk "
-                        + javaIdentifier + ".");
+                skipped.add(
+                        asset.getNamespacedId()
+                                + ": mapping dengan CMD "
+                                + assetCmdValue
+                                + " tidak ditemukan untuk "
+                                + javaIdentifier + "."
+                );
                 continue;
             }
 
             if (!definition.has("bedrock_identifier")
                     || definition.get("bedrock_identifier").isJsonNull()) {
-                skipped.add(asset.getNamespacedId()
-                        + ": Bedrock identifier tidak ditemukan.");
+                skipped.add(
+                        asset.getNamespacedId()
+                                + ": Bedrock identifier tidak ditemukan."
+                );
                 continue;
             }
 
@@ -169,9 +276,11 @@ public class ItemsAdderBedrockResourcePackBuilder {
                     .getAsString();
 
             if (generatedIdentifiers.containsKey(bedrockIdentifier)) {
-                skipped.add(asset.getNamespacedId()
-                        + ": Bedrock identifier duplikat dengan "
-                        + generatedIdentifiers.get(bedrockIdentifier));
+                skipped.add(
+                        asset.getNamespacedId()
+                                + ": Bedrock identifier duplikat dengan "
+                                + generatedIdentifiers.get(bedrockIdentifier)
+                );
                 continue;
             }
 
@@ -179,8 +288,10 @@ public class ItemsAdderBedrockResourcePackBuilder {
                     findResolvedAsset(resolution, asset);
 
             if (resolvedAsset == null) {
-                skipped.add(asset.getNamespacedId()
-                        + ": aset tidak ditemukan dalam hasil resolver.");
+                skipped.add(
+                        asset.getNamespacedId()
+                                + ": aset tidak ditemukan dalam hasil resolver."
+                );
                 continue;
             }
 
@@ -189,22 +300,28 @@ public class ItemsAdderBedrockResourcePackBuilder {
             if (sourceTexture == null) {
                 String missing = resolvedAsset.getMissingReferences()
                         .isEmpty()
-                        ? "referensi properti tekstur tidak ditemukan"
+                        ? "referensi tekstur tidak ditemukan dalam ZIP"
                         : String.join(
                                 ", ",
                                 resolvedAsset.getMissingReferences()
                         );
 
-                skipped.add(asset.getNamespacedId()
-                        + ": tekstur tidak ditemukan: " + missing);
+                skipped.add(
+                        asset.getNamespacedId()
+                                + ": tekstur tidak ditemukan: "
+                                + missing
+                );
                 continue;
             }
 
             String atlasKey = toAtlasKey(bedrockIdentifier);
 
             if (textureData.has(atlasKey)) {
-                skipped.add(asset.getNamespacedId()
-                        + ": key tekstur atlas duplikat: " + atlasKey);
+                skipped.add(
+                        asset.getNamespacedId()
+                                + ": key tekstur atlas duplikat: "
+                                + atlasKey
+                );
                 continue;
             }
 
@@ -222,7 +339,9 @@ public class ItemsAdderBedrockResourcePackBuilder {
             JsonObject textureEntry = new JsonObject();
             JsonArray texturePaths = new JsonArray();
 
-            texturePaths.add("textures/items/" + atlasKey);
+            texturePaths.add(
+                    "textures/items/" + atlasKey
+            );
 
             textureEntry.add("textures", texturePaths);
             textureData.add(atlasKey, textureEntry);
@@ -238,10 +357,13 @@ public class ItemsAdderBedrockResourcePackBuilder {
         if (copiedTextures == 0) {
             throw new IOException(
                     "Tidak ada tekstur item yang berhasil dikonversi. "
-                            + "Resolver memindai "
+                            + "Sumber: "
+                            + (zipMode
+                            ? generatedZip.getName()
+                            : "ItemsAdder contents (mode lama)")
+                            + ". Resolver memindai "
                             + resolution.getScannedFiles()
-                            + " file, tetapi tidak menemukan referensi "
-                            + "tekstur PNG yang cocok dengan item bermapping."
+                            + " file."
             );
         }
 
@@ -263,11 +385,11 @@ public class ItemsAdderBedrockResourcePackBuilder {
         );
 
         writeJson(
-                new File(workingDirectory, "textures/item_texture.json"),
+                new File(packRoot, "textures/item_texture.json"),
                 textureAtlas
         );
 
-        writeManifest(workingDirectory);
+        writeManifest(packRoot);
 
         File packFile = new File(
                 packsDirectory,
@@ -281,7 +403,7 @@ public class ItemsAdderBedrockResourcePackBuilder {
 
         Files.deleteIfExists(temporaryPack.toPath());
 
-        createArchive(workingDirectory, temporaryPack);
+        createArchive(packRoot, temporaryPack);
 
         try {
             Files.move(
@@ -299,20 +421,29 @@ public class ItemsAdderBedrockResourcePackBuilder {
         }
 
         warnings.add(
-                "Resolver memindai " + resolution.getScannedFiles()
-                        + " file dari seluruh ItemsAdder contents."
+                "Sumber aset: "
+                        + (zipMode
+                        ? generatedZip.getAbsolutePath()
+                        : itemsAdderContents.getAbsolutePath())
         );
 
         warnings.add(
-                "Resolver menemukan " + resolution.getResolvedFiles()
+                "Resolver memindai "
+                        + resolution.getScannedFiles()
+                        + " file."
+        );
+
+        warnings.add(
+                "Resolver menemukan "
+                        + resolution.getResolvedFiles()
                         + " referensi file dan "
                         + resolution.getMissingReferences()
                         + " referensi yang tidak ditemukan."
         );
 
         warnings.add(
-                "Builder hanya mengambil PNG dari properti tekstur, "
-                        + "bukan dari referensi model, sound, atau animasi."
+                "Builder mengambil PNG dari properti tekstur "
+                        + "dan tekstur yang ditemukan melalui model JSON."
         );
 
         warnings.add(
@@ -443,7 +574,6 @@ public class ItemsAdderBedrockResourcePackBuilder {
             }
 
             for (File file : entry.getValue()) {
-
                 if (file == null || !file.isFile()) {
                     continue;
                 }
@@ -571,7 +701,6 @@ public class ItemsAdderBedrockResourcePackBuilder {
                 Files.newOutputStream(destination.toPath()))) {
 
             try (var stream = Files.walk(source.toPath())) {
-
                 for (Path path : stream
                         .filter(Files::isRegularFile)
                         .toList()) {
@@ -597,11 +726,9 @@ public class ItemsAdderBedrockResourcePackBuilder {
         }
 
         try (var stream = Files.walk(directory)) {
-
             for (Path path : stream
                     .sorted(Comparator.reverseOrder())
                     .toList()) {
-
                 Files.deleteIfExists(path);
             }
         }
