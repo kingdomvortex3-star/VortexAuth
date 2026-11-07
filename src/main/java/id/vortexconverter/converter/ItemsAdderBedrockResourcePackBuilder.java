@@ -154,6 +154,10 @@ public class ItemsAdderBedrockResourcePackBuilder {
 
         JsonObject textureData = new JsonObject();
 
+        // Hanya definisi mapping yang berhasil dikonversi
+        // yang akan dimasukkan ke hasil akhir.
+        JsonObject filteredItems = new JsonObject();
+
         Map<String, String> generatedIdentifiers = new LinkedHashMap<>();
 
         int discoveredItems = 0;
@@ -312,6 +316,22 @@ public class ItemsAdderBedrockResourcePackBuilder {
                     asset.getNamespacedId()
             );
 
+            // Simpan hanya mapping yang teksturnya berhasil disalin.
+            JsonArray retainedDefinitions;
+
+            if (filteredItems.has(javaIdentifier)) {
+                retainedDefinitions =
+                        filteredItems.getAsJsonArray(javaIdentifier);
+            } else {
+                retainedDefinitions = new JsonArray();
+                filteredItems.add(
+                        javaIdentifier,
+                        retainedDefinitions
+                );
+            }
+
+            retainedDefinitions.add(definition.deepCopy());
+
             copiedTextures++;
         }
 
@@ -327,6 +347,9 @@ public class ItemsAdderBedrockResourcePackBuilder {
                             + " file."
             );
         }
+
+        // Sinkronkan mapping dengan texture atlas yang benar-benar dibuat.
+        mappingResult.mapping().add("items", filteredItems);
 
         JsonObject textureAtlas = new JsonObject();
 
@@ -397,6 +420,10 @@ public class ItemsAdderBedrockResourcePackBuilder {
                         + " referensi file dan "
                         + resolution.getMissingReferences()
                         + " referensi yang tidak ditemukan."
+        );
+
+        warnings.add(
+                "Mapping telah disinkronkan dengan tekstur yang berhasil disalin."
         );
 
         warnings.add(
@@ -517,7 +544,6 @@ public class ItemsAdderBedrockResourcePackBuilder {
         Map<String, List<File>> files =
                 resolvedAsset.getResolvedFiles();
 
-        // Prioritas 1: tekstur langsung dari YAML ItemsAdder.
         for (Map.Entry<String, List<File>> entry : files.entrySet()) {
             String key = entry.getKey();
 
@@ -538,21 +564,18 @@ public class ItemsAdderBedrockResourcePackBuilder {
             }
         }
 
-        // Prioritas 2: layer0 dari model JSON.
         File layer0 = findModelTexture(files, ":layer0:");
 
         if (layer0 != null) {
             return layer0;
         }
 
-        // Prioritas 3: particle dari model JSON.
         File particle = findModelTexture(files, ":particle:");
 
         if (particle != null) {
             return particle;
         }
 
-        // Prioritas 4: tekstur model lain sebagai fallback.
         for (Map.Entry<String, List<File>> entry : files.entrySet()) {
             if (!entry.getKey().startsWith("textures:model_texture:")) {
                 continue;
