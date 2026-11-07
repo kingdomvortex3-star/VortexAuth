@@ -19,6 +19,15 @@ public final class ItemsAdderBedrockRenderControllerBuilder {
     public static final String CONTROLLER_IDENTIFIER =
             "controller.render.default";
 
+    public static final String GEOMETRY_REFERENCE =
+            "Geometry.default";
+
+    public static final String MATERIAL_REFERENCE =
+            "Material.default";
+
+    public static final String TEXTURE_REFERENCE =
+            "Texture.default";
+
     public JsonObject build() {
         JsonObject root = new JsonObject();
 
@@ -29,20 +38,23 @@ public final class ItemsAdderBedrockRenderControllerBuilder {
 
         controller.addProperty(
                 "geometry",
-                "Geometry.default"
+                GEOMETRY_REFERENCE
         );
 
-        JsonObject materials = new JsonObject();
+        JsonArray materials = new JsonArray();
+        JsonObject materialEntry = new JsonObject();
 
-        materials.addProperty(
+        materialEntry.addProperty(
                 "*",
-                "Material.default"
+                MATERIAL_REFERENCE
         );
+
+        materials.add(materialEntry);
 
         controller.add("materials", materials);
 
         JsonArray textures = new JsonArray();
-        textures.add("Texture.default");
+        textures.add(TEXTURE_REFERENCE);
 
         controller.add("textures", textures);
 
@@ -64,6 +76,10 @@ public final class ItemsAdderBedrockRenderControllerBuilder {
                     "Folder resource pack tidak tersedia."
             );
         }
+
+        Files.createDirectories(
+                resourcePackDirectory.toPath()
+        );
 
         File directory = new File(
                 resourcePackDirectory,
