@@ -26,8 +26,10 @@ public final class ItemsAdderAssetResolver {
     public static final class ResolvedAsset {
 
         private final ItemsAdderConfigParser.AssetInfo asset;
+
         private final Map<String, List<File>> resolvedFiles =
                 new LinkedHashMap<>();
+
         private final List<String> missingReferences =
                 new ArrayList<>();
 
@@ -155,8 +157,12 @@ public final class ItemsAdderAssetResolver {
                         continue;
                     }
 
-                    resolved.resolvedFiles.put(resultKey, matches);
-                    result.resolvedFiles += matches.size();
+                    putResolvedFiles(
+                            resolved,
+                            result,
+                            resultKey,
+                            matches
+                    );
 
                     if (isModelProperty(property)) {
                         for (File modelFile : matches) {
@@ -198,11 +204,13 @@ public final class ItemsAdderAssetResolver {
         collectModelTextures(
                 modelFile,
                 modelReference,
+                modelReference,
                 assetNamespace,
                 index,
                 inheritedTextures,
                 visitedModels,
                 resolved,
+                result,
                 0
         );
 
@@ -210,6 +218,7 @@ public final class ItemsAdderAssetResolver {
                 : inheritedTextures.entrySet()) {
 
             String textureKey = entry.getKey();
+
             String textureReference = resolveTextureAlias(
                     entry.getValue(),
                     inheritedTextures,
@@ -267,21 +276,25 @@ public final class ItemsAdderAssetResolver {
                 continue;
             }
 
-            if (!resolved.resolvedFiles.containsKey(resultKey)) {
-                resolved.resolvedFiles.put(resultKey, textureFiles);
-                result.resolvedFiles += textureFiles.size();
-            }
+            putResolvedFiles(
+                    resolved,
+                    result,
+                    resultKey,
+                    textureFiles
+            );
         }
     }
 
     private void collectModelTextures(
             File modelFile,
             String modelReference,
+            String rootModelReference,
             String assetNamespace,
             FileIndex index,
             Map<String, String> inheritedTextures,
             Set<String> visitedModels,
             ResolvedAsset resolved,
+            ResolutionResult result,
             int depth
     ) {
         if (modelFile == null || !modelFile.isFile()) {
@@ -291,7 +304,7 @@ public final class ItemsAdderAssetResolver {
         if (depth >= MAX_PARENT_DEPTH) {
             resolved.missingReferences.add(
                     "model_parent_depth:"
-                            + modelReference
+                            + rootModelReference
                             + ":batas kedalaman parent tercapai."
             );
             return;
@@ -311,7 +324,10 @@ public final class ItemsAdderAssetResolver {
 
         if (!visitedModels.add(modelIdentity)) {
             resolved.missingReferences.add(
-                    "model_parent_cycle:" + modelReference
+                    "model_parent_cycle:"
+                            + rootModelReference
+                            + ":"
+                            + modelReference
             );
             return;
         }
@@ -324,14 +340,15 @@ public final class ItemsAdderAssetResolver {
 
             if (!rootElement.isJsonObject()) {
                 resolved.missingReferences.add(
-                        "model_invalid_json:" + modelReference
+                        "model_invalid_json:"
+                                + modelReference
                 );
                 return;
             }
 
             JsonObject root = rootElement.getAsJsonObject();
 
-            // Parent diproses terlebih dahulu.
+            // Parent harus diproses sebelum texture child.
             if (root.has("parent")
                     && root.get("parent").isJsonPrimitive()
                     && root.getAsJsonPrimitive("parent").isString()) {
@@ -340,45 +357,59 @@ public final class ItemsAdderAssetResolver {
                         root.get("parent").getAsString().trim();
 
                 if (!parentReference.isBlank()
-                        && !parentReference.equalsIgnoreCase("null")) {
+                        && !parentReference.equalsIgnoreCase("null")
+                        && !parentReference.startsWith("minecraft:")) {
 
-                    // Parent bawaan Minecraft tidak selalu tersedia
-                    // sebagai file dalam generated.zip.
-                    if (!parentReference.startsWith("minecraft:")) {
+                    List<File> parentFiles = findFiles(
+                            parentReference,
+                            assetNamespace,
+                            index,
+                            "model"
+                    );
 
-                        List<File> parentFiles = findFiles(
-                                parentReference,
-                                assetNamespace,
-                                index,
-                                "model"
+                    if (parentFiles.isEmpty()) {
+                        resolved.missingReferences.add(
+                                "model_parent:"
+                                        + rootModelReference
+                                        + ":"
+                                        + parentReference
                         );
+                    } else {
+                        for (File parentFile : parentFiles) {
 
-                        if (parentFiles.isEmpty()) {
-                            resolved.missingReferences.add(
-                                    "model_parent:"
-                                            + modelReference
+                            String parentKey =
+                                    "models:parent:"
+                                            + rootModelReference
                                             + ":"
-                                            + parentReference
+                                            + parentReference;
+
+                            // Simpan file parent agar tahap Builder
+                            // dapat mengambil geometry-nya.
+                            putResolvedFiles(
+                                    resolved,
+                                    result,
+                                    parentKey,
+                                    List.of(parentFile)
                             );
-                        } else {
-                            for (File parentFile : parentFiles) {
-                                collectModelTextures(
-                                        parentFile,
-                                        parentReference,
-                                        assetNamespace,
-                                        index,
-                                        inheritedTextures,
-                                        visitedModels,
-                                        resolved,
-                                        depth + 1
-                                );
-                            }
+
+                            collectModelTextures(
+                                    parentFile,
+                                    parentReference,
+                                    rootModelReference,
+                                    assetNamespace,
+                                    index,
+                                    inheritedTextures,
+                                    visitedModels,
+                                    resolved,
+                                    result,
+                                    depth + 1
+                            );
                         }
                     }
                 }
             }
 
-            // Texture milik child menggantikan key parent yang sama.
+            // Texture child menimpa key parent yang sama.
             if (root.has("textures")
                     && root.get("textures").isJsonObject()) {
 
@@ -421,6 +452,57 @@ public final class ItemsAdderAssetResolver {
             );
         } finally {
             visitedModels.remove(modelIdentity);
+        }
+    }
+
+    private void putResolvedFiles(
+            ResolvedAsset resolved,
+            ResolutionResult result,
+            String key,
+            List<File> files
+    ) {
+        if (files == null || files.isEmpty()) {
+            return;
+        }
+
+        List<File> existing = resolved.resolvedFiles.get(key);
+
+        if (existing == null) {
+            existing = new ArrayList<>();
+            resolved.resolvedFiles.put(key, existing);
+        }
+
+        Set<String> knownPaths = new LinkedHashSet<>();
+
+        for (File file : existing) {
+            if (file != null) {
+                knownPaths.add(normalizeFileIdentity(file));
+            }
+        }
+
+        for (File file : files) {
+            if (file == null || !file.isFile()) {
+                continue;
+            }
+
+            String identity = normalizeFileIdentity(file);
+
+            if (knownPaths.add(identity)) {
+                existing.add(file);
+                result.resolvedFiles++;
+            }
+        }
+    }
+
+    private String normalizeFileIdentity(File file) {
+        try {
+            return file.toPath()
+                    .toRealPath()
+                    .toString()
+                    .toLowerCase(Locale.ROOT);
+        } catch (IOException exception) {
+            return file.getAbsolutePath()
+                    .toLowerCase(Locale.ROOT);
         }
     }
 
