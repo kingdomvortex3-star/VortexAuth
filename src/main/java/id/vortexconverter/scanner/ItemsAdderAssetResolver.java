@@ -219,7 +219,7 @@ public final class ItemsAdderAssetResolver {
                         "texture"
                 );
 
-                String resultKey = "model_texture:"
+                String resultKey = "textures:model_texture:"
                         + modelReference
                         + ":"
                         + blockIndex
